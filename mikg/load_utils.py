@@ -61,14 +61,14 @@ def load_go(kg: nx.DiGraph, data_dir, source="GeneOntology", interaction_harmoni
         }):
     
     if not os.path.exists(os.path.join(data_dir, "goa_human.gaf")):
-        download_and_unzip("http://geneontology.org/gene-associations/goa_human.gaf.gz", ".", os.path.join(data_dir, "goa_human.gaf.gz"), ".")
+        download_and_unzip("http://geneontology.org/gene-associations/goa_human.gaf.gz", ".", os.path.join(data_dir, "goa_human.gaf.gz"), data_dir)
             
     if not os.path.exists(os.path.join(data_dir, "go-basic.obo")):
-        download_and_unzip("http://geneontology.org/ontology/go-basic.obo", ".", os.path.join(data_dir, "go-basic.obo"), ".", unzip=False)
+        download_and_unzip("http://geneontology.org/ontology/go-basic.obo", ".", os.path.join(data_dir, "go-basic.obo"), data_dir, unzip=False)
 
     genenamesURL = 'https://www.genenames.org/cgi-bin/download/custom?col=gd_hgnc_id&col=gd_app_sym&col=gd_app_name&col=gd_status&col=gd_pub_acc_ids&col=gd_pub_refseq_ids&col=md_prot_id&status=Approved&status=Entry%20Withdrawn&hgnc_dbtag=on&order_by=gd_app_sym_sort&format=text&submit=submit'
     if not os.path.exists(os.path.join(data_dir, "hgnc_annot.tsv")):
-        download_and_unzip(genenamesURL, ".", os.path.join(data_dir, "hgnc_annot.tsv"), ".", unzip=False)
+        download_and_unzip(genenamesURL, ".", os.path.join(data_dir, "hgnc_annot.tsv"), data_dir, unzip=False)
 
     ogaf = GafReader(os.path.join(data_dir, "goa_human.gaf"))
     obodag = GODag(os.path.join(data_dir, "go-basic.obo"))
@@ -137,7 +137,7 @@ def load_go(kg: nx.DiGraph, data_dir, source="GeneOntology", interaction_harmoni
             continue
         
         termName = termObj.name
-        termNS = termObj.namespace
+        termNS = str(termObj.namespace)
         
         kg.add_node(termID, id=termID, name=termName, type="geneset", ns=termNS, score=0, source=source)
         
@@ -152,8 +152,10 @@ def load_go(kg: nx.DiGraph, data_dir, source="GeneOntology", interaction_harmoni
                 kg.add_edge(child, goEntry, type="part_of", score=0, source=source)
                 
         for parent in termObj.parents:
-            if parent.id in kg.nodes and not (goEntry, parent) in kg.edges:
-                kg.add_edge(goEntry, parent, type="part_of", score=0, source=source)
+            if parent.id in kg.nodes and not (goEntry, parent.id) in kg.edges:
+                kg.add_edge(goEntry, parent.id, type="part_of", score=0, source=source)
+                
+                
                 
     all_interactions = set()
     for goID in list(go2gene):   
@@ -162,8 +164,7 @@ def load_go(kg: nx.DiGraph, data_dir, source="GeneOntology", interaction_harmoni
                 all_interactions.add(x)
 
     # add edges gene -> GO
-    for goID in list(go2gene)[:5]:
-        print(goID, go2gene[goID])
+    for goID in list(go2gene):
         
         for gene, interaction in go2gene[goID]:
             kg.add_edge( gene, goID, type=interaction_harmonize[interaction[0]], go_interaction = interaction[0], source=source)
@@ -230,11 +231,11 @@ def load_omnipath(kg: nx.DiGraph, data_dir, source="omnipath"):
             
         for src in srcGenes:
             if not src in kg.nodes:
-                kg.add_node(src, type="gene")
+                kg.add_node(src, type="gene", source=source)
             
         for tgt in tgtGenes:
             if not tgt in kg.nodes:
-                kg.add_node(tgt, type="gene")
+                kg.add_node(tgt, type="gene", source=source)
             
             
     interactionTypes = {} # stimulation, inhibition
@@ -296,7 +297,7 @@ def load_STRING(kg: nx.DiGraph, data_dir, mart_file="oct2014_mart_export.txt", s
 
 
     if not os.path.exists(os.path.join(data_dir, "9606.protein.links.full.txt.gz")):
-        download_and_unzip("https://stringdb-static.org/download/protein.links.full.v11.5/9606.protein.links.full.v11.5.txt.gz", ".", os.path.join(data_dir, "9606.protein.links.full.txt.gz"), ".")
+        download_and_unzip("https://stringdb-static.org/download/protein.links.full.v11.5/9606.protein.links.full.v11.5.txt.gz", ".", os.path.join(data_dir, "9606.protein.links.full.txt.gz"), data_dir)
 
 
     df = pd.read_csv(os.path.join(data_dir, "9606.protein.links.full.txt"), sep=" ")
@@ -346,9 +347,9 @@ def load_STRING(kg: nx.DiGraph, data_dir, mart_file="oct2014_mart_export.txt", s
             for t in tgt: 
                 
                 if not s in kg.nodes:
-                    kg.add_node(s, type="gene")
+                    kg.add_node(s, type="gene", source=source)
                 if not t in kg.nodes:
-                    kg.add_node(t, type="gene")
+                    kg.add_node(t, type="gene", source=source)
                 
                 kg.add_edge( s, t, type="interacts", string_scores=string_scores, source=source, score=0 )
                 
@@ -379,10 +380,10 @@ def load_opentargets(kg: nx.DiGraph, data_dir, source="opentargets"):
         disease_label = row["diseaseLabel"]
         
         if not gene in kg.nodes:
-            kg.add_node(gene, type="gene")
+            kg.add_node(gene, type="gene", source=source)
             
         if not disease_id in kg.nodes:
-            kg.add_node(disease_id, type="disease", name=disease_label)
+            kg.add_node(disease_id, type="disease", name=disease_label, source=source)
             
             
     #
@@ -395,13 +396,13 @@ def load_opentargets(kg: nx.DiGraph, data_dir, source="opentargets"):
         gene = row["targetGeneSymbol"]
         
         if not gene in kg.nodes:
-            kg.add_node(gene, type="gene")
+            kg.add_node(gene, type="gene", source=source)
             
         if not drug in kg.nodes:
-            kg.add_node(drug, type="drug")
+            kg.add_node(drug, type="drug", source=source)
             
         if not disease_id in kg.nodes:
-            kg.add_node(disease_id, type="disease")
+            kg.add_node(disease_id, type="disease", source=source)
             
     #
     ## Adding Disease Edges
@@ -439,8 +440,42 @@ def load_opentargets(kg: nx.DiGraph, data_dir, source="opentargets"):
         evidence_status = row["status"]
         
         drug_disease_data = {
-            "evidence_status": evidence_status
+            "evidence_status": evidence_status,
+            "source": source
         }
         
         kg.add_edge( drug, disease_id, **drug_disease_data )
-        kg.add_edge( drug, drug_target, type="targeted_by" )
+        kg.add_edge( drug, drug_target, type="targeted_by", source=source )
+        
+    return kg
+        
+        
+def load_reactome(kg: nx.DiGraph, data_dir, source="reactome"):
+
+    reactomeFile = os.path.join(data_dir,"ReactomePathways.gmt")
+    
+    if not os.path.exists(reactomeFile):
+        download_and_unzip("https://reactome.org/download/current/ReactomePathways.gmt.zip", ".", os.path.join(data_dir,"ReactomePathways.gmt.zip"), data_dir)
+        
+    
+    with open(reactomeFile) as fin:
+    
+        for line in fin:
+            line = line.strip().split("\t")
+            
+            reactomeLabel = line[0]
+            reactomeID = line[1]
+            
+            reactomeGenes = [x for x in line[2:] if x[0].isupper()]
+                
+            if not reactomeID in kg.nodes:
+                kg.add_node(reactomeID, id=reactomeID, type="geneset", name=reactomeLabel, score=0, source=source)
+            
+            
+            for gene in reactomeGenes:
+                if not gene in kg.nodes:
+                    kg.add_node(gene, type="gene", score=0)
+                    
+                kg.add_edge(gene, reactomeID, type="part_of", score=0, source=source)
+    
+    return kg
