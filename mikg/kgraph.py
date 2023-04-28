@@ -10,10 +10,16 @@ from collections import Counter, defaultdict
 import seaborn as sns
 from itertools import chain
 
+import community
+import random
+
 class KGraph:
     
-    def __init__(self) -> None:
+    def __init__(self, random_state=42) -> None:
         self.kg = nx.DiGraph()
+        
+        self.random_state=random_state
+        random.seed(random_state)
         
         self.logger = logging.getLogger("KGraph")
         self.logger.setLevel(logging.INFO)
@@ -128,7 +134,7 @@ class KGraph:
         gene2expression = {}
         
         for ri, row in exprDF.iterrows():           
-            gene2expression[row["gene"]] = { "mean": row["mean"], "perc_expr": row["anum"] / row["num"], "median": row["median"]}
+            gene2expression[row["gene"]] = { "score": row["mean"]*row["perc_expr"], "mean": row["mean"], "perc_expr": row["perc_expr"], "median": row["median"]}
             
         print(len(gene2expression))
         
@@ -172,8 +178,8 @@ class KGraph:
                 
         return returnEdges
         
-    def score_gene_gene_edges(self, scoring_gene_gene_expression):       
-        self.score_edges(lambda x: x.get("expression", {}).get("mean", 0), "type", scoring_gene_gene_expression, in_types=["gene"], out_types=["gene"])
+    def score_gene_gene_edges(self, scoring_gene_gene_expression, gene_score="score"):       
+        self.score_edges(lambda x: x.get("expression", {}).get(gene_score, 0), "type", scoring_gene_gene_expression, in_types=["gene"], out_types=["gene"])
         
         
     def score_edges(self, value_accessor, edge_accessor, scorers, in_types=None, out_types=None, ignore_edge_types=None):
@@ -325,7 +331,6 @@ class KGraph:
         
         xlim = df.score.max()
         
-        
         groups = [x for x in np.unique(df.group)]
         
         gs = grid_spec.GridSpec(len(groups),1)
@@ -393,3 +398,100 @@ class KGraph:
         kgScores = self.score_subgraphs(kgSubgraphs)
         
         return kgScores
+    
+    
+    def get_communities(self, minEdgeScore = 3.0, resolution=5):
+        
+        sub_kg = self.kg.edge_subgraph([x for x in self.kg.edges if self.kg.edges[x].get("score", 0) > minEdgeScore]).copy()
+        sub_kg_ud = sub_kg.to_undirected()
+        print(sub_kg)
+        
+        partition = community.best_partition(sub_kg_ud, resolution=5, random_state=self.random_state)
+        
+        rev_partition = defaultdict(set)
+        for x in partition:
+            rev_partition[ "Module {}".format(partition[x]) ].add(x)
+            
+        return rev_partition
+        
+        
+    def plot_communities(self, KGs, communitygenes, font_size=12):
+        def plot_graph(G, title="", close=True, pos=None):   
+
+            #pos = nx.kamada_kawai_layout(G, pos=nx.spring_layout(G, k=0.15, iterations=20))  # For better example looking
+            if pos is None:
+                pos = nx.spring_layout(G, k=0.15, iterations=10)
+            nx.draw_networkx_nodes(G, pos, node_size=100)
+            posnodes = {}
+            for x in pos:
+                posnodes[x] = list(pos[x])
+                posnodes[x][1] += 0.02
+                
+            nodelabels = {}
+            for x in G.nodes:
+                
+                if "name" in G.nodes[x]:
+                    nodelabels[x] = "{}\n({})".format(G.nodes[x].get("name", x), x)
+                else:
+                    nodelabels[x] = x
+                
+            nx.draw_networkx_labels(G, posnodes, labels=nodelabels, font_size=font_size)
+            nx.draw_networkx_edges(G, pos, width=2, edge_vmin=0, edge_vmax=ownMax*2, edge_cmap = plt.cm.Reds, edge_color=[G.edges[e].get("score", 0) for e in G.edges])
+            plt.title(title, loc='left')
+            
+            if close:
+                plt.show()
+                plt.close()
+                
+            return pos
+        
+        
+        for commgenes in communitygenes:
+            ownMax = max([self.kg.subgraph(commgenes).edges[x].get("score", 0) for x in self.kg.subgraph(commgenes).edges])
+            ownMedian = np.median(self.score_subgraphs_for_subnet({"own": self}, commgenes)["own"])
+            
+            pos=plot_graph( self.kg.subgraph(commgenes), title="Own (median score: {:.3f})".format(ownMedian) )
+            
+            for kgname in KGs:
+                kgScore = np.median(self.score_subgraphs_for_subnet({"own": KGs[kgname]}, commgenes)["own"])
+                _=plot_graph(KGs[kgname].kg.subgraph(commgenes), pos=pos, title="{} (median score: {:.3f})".format(kgname, kgScore))
+        
+        
+        
+    def identify_differential_communities(self, communities, KGs, min_nodes=10, min_enriched=0.5):
+        
+        from scipy.stats import ks_2samp
+        
+        relcomms = []
+        
+        for cID in communities:
+            
+            if len(communities[cID]) < min_nodes:
+                continue
+            
+            commScores = self.score_subgraphs_for_subnet(KGs, communities[cID])
+            ownScores = self.score_subgraphs_for_subnet({"own": self}, communities[cID])["own"]
+            
+            diffScores = {}
+            for x in commScores:
+                diffScores[x] = {}
+                diffScores[x]["median_other"] = np.median(commScores[x])
+                diffScores[x]["median_own"] = np.median(ownScores)
+                diffScores[x]["logFC"] = np.log2(np.median(commScores[x]) / np.median(ownScores))
+                diffScores[x]["ks"] = ks_2samp(commScores[x], ownScores)
+                
+                
+            enrichedModule = 0
+            for x in diffScores:
+                if abs(diffScores[x]["logFC"] <= 0.1):
+                    enrichedModule+=1
+                
+            if enrichedModule / len(diffScores) >= min_enriched:
+                print("community", cID, len(communities[cID]))
+                for x in diffScores:
+                    print(x, diffScores[x])
+                    
+                relcomms.append(cID)
+                
+        return relcomms
+                
