@@ -5,6 +5,7 @@ import urllib
 import zipfile
 import gzip
 import pandas as pd
+import numpy as np
 
 from collections import defaultdict
 from goatools.anno.gaf_reader import GafReader
@@ -167,7 +168,8 @@ def load_go(kg: nx.DiGraph, data_dir, source="GeneOntology", interaction_harmoni
     for goID in list(go2gene):
         
         for gene, interaction in go2gene[goID]:
-            kg.add_edge( gene, goID, type=interaction_harmonize[interaction[0]], go_interaction = interaction[0], source=source)
+            if goID in kg.nodes:
+                kg.add_edge( gene, goID, type=interaction_harmonize[interaction[0]], go_interaction = interaction[0], source=source)
             
             
     return kg
@@ -319,7 +321,13 @@ def load_STRING(kg: nx.DiGraph, data_dir, mart_file="oct2014_mart_export.txt", s
     martDF = pd.read_csv(os.path.join(data_dir, mart_file), sep="\t")
 
     ensemblProt2Gene = defaultdict(set)
-    for ri, row in martDF[~pd.isna(martDF["Ensembl Protein ID"])].iterrows():
+    
+    martEmptyProt = ~pd.isna(martDF["Ensembl Protein ID"])
+    martEmptyHgnc = ~pd.isna(martDF["HGNC symbol"])
+    
+    martFilter = np.where(martEmptyProt & martEmptyHgnc)
+    
+    for ri, row in martDF.loc[martFilter].iterrows():
         
         protid = "9606.{}".format(row["Ensembl Protein ID"])
         geneid = row["HGNC symbol"]
@@ -344,7 +352,16 @@ def load_STRING(kg: nx.DiGraph, data_dir, mart_file="oct2014_mart_export.txt", s
             string_scores[sc] = row[sc]
                     
         for s in src:
-            for t in tgt: 
+            for t in tgt:
+                
+                if s == "PGM3":
+                    print(s, t, string_scores)
+                
+                # fixes empty gene symbols in mart file ...
+                if s == "":
+                    s = src
+                if t == "":
+                    t = tgt
                 
                 if not s in kg.nodes:
                     kg.add_node(s, type="gene", source=source)
@@ -376,7 +393,7 @@ def load_opentargets(kg: nx.DiGraph, data_dir, source="opentargets"):
     
     for ri, row in ot_disease.iterrows():
         gene = row["targetSymbol"]
-        disease_id = row["diseaseId"]
+        disease_id = row["diseaseId"].replace("_", ":")
         disease_label = row["diseaseLabel"]
         
         if not gene in kg.nodes:
@@ -392,7 +409,7 @@ def load_opentargets(kg: nx.DiGraph, data_dir, source="opentargets"):
     
     for ri, row in ot_drugs.iterrows():
         drug = row["drugId"]
-        disease_id = row["diseaseId"]
+        disease_id = row["diseaseId"].replace("_", ":")
         gene = row["targetGeneSymbol"]
         
         if not gene in kg.nodes:
@@ -410,7 +427,7 @@ def load_opentargets(kg: nx.DiGraph, data_dir, source="opentargets"):
     for ri, row in ot_disease.iterrows():
             
         gene = row["targetSymbol"]
-        disease_id = row["diseaseId"]
+        disease_id = row["diseaseId"].replace("_", ":")
         
         disease_score = row["datatypeHarmonicScore"]
         disease_evidences = row["datatypeEvidenceCount"]
@@ -434,14 +451,15 @@ def load_opentargets(kg: nx.DiGraph, data_dir, source="opentargets"):
 
             
         drug = row["drugId"]
-        disease_id = row["diseaseId"]
+        disease_id = row["diseaseId"].replace("_", ":")
         drug_target = row["targetGeneSymbol"]
         
         evidence_status = row["status"]
         
         drug_disease_data = {
             "evidence_status": evidence_status,
-            "source": source
+            "source": source,
+            "type": "affects"
         }
         
         kg.add_edge( drug, disease_id, **drug_disease_data )
