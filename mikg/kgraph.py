@@ -415,13 +415,17 @@ class KGraph:
         return rev_partition
         
         
-    def plot_communities(self, KGs, communitygenes, font_size=12):
-        def plot_graph(G, title="", close=True, pos=None):   
+    def plot_communities(self, KGs, communitygenes, font_size=12, grid=True):
+        def plot_graph(G, ax=None, title="", pos=None, close=True):   
+            
+            if ax is None:
+                print("Creating subplots")
+                fig, ax = plt.subplots(1,1)
 
             #pos = nx.kamada_kawai_layout(G, pos=nx.spring_layout(G, k=0.15, iterations=20))  # For better example looking
             if pos is None:
                 pos = nx.spring_layout(G, k=0.15, iterations=10)
-            nx.draw_networkx_nodes(G, pos, node_size=100)
+            nx.draw_networkx_nodes(G, pos, node_size=100, ax=ax)
             posnodes = {}
             for x in pos:
                 posnodes[x] = list(pos[x])
@@ -435,9 +439,9 @@ class KGraph:
                 else:
                     nodelabels[x] = x
                 
-            nx.draw_networkx_labels(G, posnodes, labels=nodelabels, font_size=font_size)
-            nx.draw_networkx_edges(G, pos, width=2, edge_vmin=0, edge_vmax=ownMax*2, edge_cmap = plt.cm.Reds, edge_color=[G.edges[e].get("score", 0) for e in G.edges])
-            plt.title(title, loc='left')
+            nx.draw_networkx_labels(G, posnodes, labels=nodelabels, font_size=font_size, ax=ax)
+            nx.draw_networkx_edges(G, pos, width=2, edge_vmin=0, edge_vmax=ownMax*2, edge_cmap = plt.cm.Reds, edge_color=[G.edges[e].get("score", 0) for e in G.edges], ax=ax)
+            ax.set_title(title, loc='left')
             
             if close:
                 plt.show()
@@ -445,17 +449,40 @@ class KGraph:
                 
             return pos
         
+    
         
         for commgenes in communitygenes:
+            
+            if grid:
+                import math
+                
+                numCols = min(len(KGs)+1, 4)
+                numRows = math.ceil((len(KGs)+1)/numCols)
+                
+                fig, axs = plt.subplots(numRows, numCols, figsize=(6*numCols, 6*numRows))
+                flataxs = axs.flat
+                
+                print(numCols, numRows, len(flataxs))
+            else:
+                flataxs = [None]*(len(KGs)+1)
+            
             ownMax = max([self.kg.subgraph(commgenes).edges[x].get("score", 0) for x in self.kg.subgraph(commgenes).edges])
             ownMedian = np.median(self.score_subgraphs_for_subnet({"own": self}, commgenes)["own"])
             
-            pos=plot_graph( self.kg.subgraph(commgenes), title="Own (median score: {:.3f})".format(ownMedian) )
+            pos=plot_graph( self.kg.subgraph(commgenes), ax=flataxs[0], title="Own (median score: {:.3f})".format(ownMedian), close=False)
             
-            for kgname in KGs:
+            for kgi, kgname in enumerate(KGs):
                 kgScore = np.median(self.score_subgraphs_for_subnet({"own": KGs[kgname]}, commgenes)["own"])
-                _=plot_graph(KGs[kgname].kg.subgraph(commgenes), pos=pos, title="{} (median score: {:.3f})".format(kgname, kgScore))
+                _=plot_graph(KGs[kgname].kg.subgraph(commgenes), ax=flataxs[kgi+1], pos=pos, title="{} (median score: {:.3f})".format(kgname, kgScore), close=False)
         
+        
+            if grid:
+                for ax in axs.flat:
+                    ax.set(xlabel='x-label', ylabel='y-label')
+                    ax.label_outer()
+                    
+        plt.show()
+        plt.close()
         
         
     def identify_differential_communities(self, communities, KGs, min_nodes=10, min_enriched=0.5):
