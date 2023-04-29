@@ -415,8 +415,9 @@ class KGraph:
         return rev_partition
         
         
-    def plot_communities(self, KGs, communitygenes, font_size=12, grid=True):
-        def plot_graph(G, ax=None, title="", pos=None, close=True):   
+    def plot_communities(self, KGs, communitygenes, font_size=12, grid=True, titles=None, nodecolors = {"gene": "#239756", "geneset": "#3fc37e", "disease": "#5047ee", "drug": "#3026c1", "NA": "#f37855" }):
+        #'gene': 51578, 'geneset': 49332, 'disease': 12701, 'drug': 3212
+        def plot_graph(G, ax=None, title="", pos=None, close=True, nodetype2color=None):   
             
             if ax is None:
                 print("Creating subplots")
@@ -425,7 +426,16 @@ class KGraph:
             #pos = nx.kamada_kawai_layout(G, pos=nx.spring_layout(G, k=0.15, iterations=20))  # For better example looking
             if pos is None:
                 pos = nx.spring_layout(G, k=0.15, iterations=10)
-            nx.draw_networkx_nodes(G, pos, node_size=100, ax=ax)
+                
+            
+            nodecolor = None
+            if not nodetype2color is None:
+                nodecolor = []
+                for node in G.nodes:
+                    nodecolor.append(nodecolors.get(G.nodes[node].get("type", "NA"), "#f37855"))
+                    
+                
+            nx.draw_networkx_nodes(G, pos, node_size=100, ax=ax, node_color=nodecolor)
             posnodes = {}
             for x in pos:
                 posnodes[x] = list(pos[x])
@@ -451,7 +461,7 @@ class KGraph:
         
     
         
-        for commgenes in communitygenes:
+        for ci, commgenes in enumerate(communitygenes):
             
             if grid:
                 import math
@@ -459,7 +469,7 @@ class KGraph:
                 numCols = min(len(KGs)+1, 4)
                 numRows = math.ceil((len(KGs)+1)/numCols)
                 
-                fig, axs = plt.subplots(numRows, numCols, figsize=(6*numCols, 6*numRows))
+                fig, axs = plt.subplots(numRows, numCols, figsize=(6*numCols, 6*numRows), constrained_layout=True)
                 flataxs = axs.flat
                 
                 print(numCols, numRows, len(flataxs))
@@ -469,23 +479,31 @@ class KGraph:
             ownMax = max([self.kg.subgraph(commgenes).edges[x].get("score", 0) for x in self.kg.subgraph(commgenes).edges])
             ownMedian = np.median(self.score_subgraphs_for_subnet({"own": self}, commgenes)["own"])
             
-            pos=plot_graph( self.kg.subgraph(commgenes), ax=flataxs[0], title="Own (median score: {:.3f})".format(ownMedian), close=False)
+            pos=plot_graph( self.kg.subgraph(commgenes), ax=flataxs[0], title="Own (median score: {:.3f})".format(ownMedian), close=False, nodetype2color=nodecolors)
             
             for kgi, kgname in enumerate(KGs):
                 kgScore = np.median(self.score_subgraphs_for_subnet({"own": KGs[kgname]}, commgenes)["own"])
-                _=plot_graph(KGs[kgname].kg.subgraph(commgenes), ax=flataxs[kgi+1], pos=pos, title="{} (median score: {:.3f})".format(kgname, kgScore), close=False)
+                _=plot_graph(KGs[kgname].kg.subgraph(commgenes), ax=flataxs[kgi+1], pos=pos, title="{} (median score: {:.3f})".format(kgname, kgScore), close=False, nodetype2color=nodecolors)
         
         
             if grid:
-                for ax in axs.flat:
-                    ax.set(xlabel='x-label', ylabel='y-label')
-                    ax.label_outer()
+                #for ax in axs.flat:
+                #    ax.set(xlabel='x-label', ylabel='y-label')
+                #    ax.label_outer()
+                pass
+                    
+            if not titles is None:
+                title = titles[ci]
+                
+                #fig.subplots_adjust(top=0.90)
+
+                fig.suptitle(title, x=0.025, fontweight="bold")
                     
         plt.show()
         plt.close()
         
         
-    def identify_differential_communities(self, communities, KGs, min_nodes=10, min_enriched=0.5):
+    def identify_differential_communities(self, communities, KGs, min_nodes=10, min_enriched=0.5, verbose=False):
         
         from scipy.stats import ks_2samp
         
@@ -514,9 +532,11 @@ class KGraph:
                     enrichedModule+=1
                 
             if enrichedModule / len(diffScores) >= min_enriched:
-                print("community", cID, len(communities[cID]))
-                for x in diffScores:
-                    print(x, diffScores[x])
+                
+                if verbose:
+                    print("community", cID, len(communities[cID]))
+                    for x in diffScores:
+                        print(x, diffScores[x])
                     
                 relcomms.append(cID)
                 
