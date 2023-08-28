@@ -170,8 +170,7 @@ def load_go(kg: nx.DiGraph, data_dir, source="GeneOntology", interaction_harmoni
         for gene, interaction in go2gene[goID]:
             if goID in kg.nodes:
                 kg.add_edge( gene, goID, type=interaction_harmonize[interaction[0]], go_interaction = interaction[0], source=source)
-            
-            
+
     return kg
             
 def load_omnipath(kg: nx.DiGraph, data_dir, source="omnipath"):
@@ -373,7 +372,7 @@ def load_STRING(kg: nx.DiGraph, data_dir, mart_file="oct2014_mart_export.txt", s
     return kg
 
 
-def load_opentargets(kg: nx.DiGraph, data_dir, source="opentargets"):
+def load_opentargets(kg: nx.DiGraph, data_dir, source="opentargets", min_disease_association_score=0.8):
     
     if not os.path.exists(os.path.join(data_dir, "opentargets_knowndrugs.tsv")):
         print("Missing OpenTargets data frame knowndrugs. Prepare data according to Jupyter Notebook:", "opentargets_knowndrugs")
@@ -429,18 +428,22 @@ def load_opentargets(kg: nx.DiGraph, data_dir, source="opentargets"):
         gene = row["targetSymbol"]
         disease_id = row["diseaseId"].replace("_", ":")
         
-        disease_score = row["datatypeHarmonicScore"]
+        disease_score = float(row["datatypeHarmonicScore"])
         disease_evidences = row["datatypeEvidenceCount"]
         disease_evidence_source = row["datatypeId"]
+        
+        if disease_score < min_disease_association_score:
+            continue
         
         disease_data = {
             "disease_score": disease_score,
             "disease_evidences": disease_evidences,
             "disease_evidence_source": disease_evidence_source,
-            "type": "interacts"
+            "type": "interacts",
+            "source": source
         }
         
-        kg.add_edge( disease_id, gene, **disease_data )
+        kg.add_edge( gene, disease_id, **disease_data )
         
         
     #
