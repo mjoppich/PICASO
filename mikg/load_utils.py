@@ -409,16 +409,21 @@ def load_opentargets(kg: nx.DiGraph, data_dir, source="opentargets", min_disease
     for ri, row in ot_drugs.iterrows():
         drug = row["drugId"]
         disease_id = row["diseaseId"].replace("_", ":")
+        diseaseName = row["diseaseName"]
         gene = row["targetGeneSymbol"]
+        geneName = row["targetGeneName"]
+        
+        drugName = row["prefName"]
+        drugType = row["drugType"]
         
         if not gene in kg.nodes:
-            kg.add_node(gene, type="gene", source=source)
+            kg.add_node(gene, type="gene", name=geneName, source=source)
             
         if not drug in kg.nodes:
-            kg.add_node(drug, type="drug", source=source)
+            kg.add_node(drug, type="drug", source=source, name=drugName, drug_type=drugType)
             
         if not disease_id in kg.nodes:
-            kg.add_node(disease_id, type="disease", source=source)
+            kg.add_node(disease_id, type="disease", name=diseaseName, source=source)
             
     #
     ## Adding Disease Edges
