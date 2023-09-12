@@ -13,6 +13,7 @@ import tempfile
 import community
 import glob
 import random
+import json
 
 
 
@@ -125,6 +126,83 @@ class KGraph:
             
         return nodeTypes
        
+    def plot_node_types(self):
+        
+        ntCounter = self.get_node_types()
+        
+        counteritems = [("{}\nn={}".format(x, ntCounter[x]), ntCounter[x]) for x in ntCounter]
+        counteritems = sorted(counteritems, key=lambda x: x[1])
+                   
+        self._plot_pie(counteritems)
+       
+       
+    #
+    def plot_edge_types(self):
+        
+        ntCounter = self.get_edge_types()
+        
+        counteritems = [("{}\nn={}".format(x, ntCounter[x]), ntCounter[x]) for x in ntCounter]
+        counteritems = sorted(counteritems, key=lambda x: x[1])
+                   
+        self._plot_pie(counteritems)
+        
+    def plot_edge_sources(self):
+        
+        ntCounter = self.get_edge_types(field="source")
+        
+        counteritems = [("{}\nn={}".format(x, ntCounter[x]), ntCounter[x]) for x in ntCounter]
+        counteritems = sorted(counteritems, key=lambda x: x[1])
+                   
+        self._plot_pie(counteritems)
+       
+    def plot_edge_between_types(self):
+        
+        ntCounter = self.get_edge_between_type()
+        
+        counteritems = [("{} → {}\nn={}".format(x[0], x[1], ntCounter[x]), ntCounter[x]) for x in ntCounter]
+        counteritems = sorted(counteritems, key=lambda x: x[1])
+                   
+        self._plot_pie(counteritems)
+        
+            
+    def _plot_pie(self, counteritems):
+        
+        
+        finallist = []
+        for i in range(0, len(counteritems)):
+            if i % 2 == 0:
+                finallist.append( counteritems.pop() )
+            else:
+                finallist.append(counteritems.pop(0))
+        
+        data = []
+        labels = []        
+        explode = []
+        
+        for x,y in finallist:
+            data.append(y)
+            labels.append(x)
+            
+            if len(explode) % 2 == 0:
+                explode.append(0)
+            else:
+                explode.append(0.1)
+        
+        # Creating plot
+        #fig = plt.figure(figsize =(10, 7))
+        _, _, autotexts = plt.pie(data, labels = labels, explode = explode, autopct = '%1.1f%%', wedgeprops = {"edgecolor" : "black",
+                    'linewidth' : 2,
+                    'antialiased': True})
+        
+        for autotext in autotexts:
+            autotext.set_color('white')
+        
+        # show plot
+        plt.show()
+        plt.close()
+               
+
+
     def get_edge_types(self, field="type"):
         
         edgeTypes = Counter()
@@ -287,7 +365,7 @@ class KGraph:
         return returnChildren
                 
                 
-    def score_nodes_hierarchically(self, ntype="geneset", target_ntype="gene", relevance_threshold=1, child_score_accessor=lambda x: x.get("expression", {}).get("score", 0)):
+    def score_nodes_hierarchically(self, ntype="geneset", target_ntype="gene", relevance_threshold=0, child_score_accessor=lambda x: x.get("expression", {}).get("score", 0)):
         
         assert(not child_score_accessor is None)
         
@@ -598,7 +676,9 @@ class KGraph:
     def get_nx_subgraph(self, genes):
         return self.kg.subgraph(genes).copy() # copy avoids edge view problematics ...
 
-    def plot_graph(self, ax=None, figsize=(6,6), title="", pos=None, close=True, nodetype2color=None, font_size=8, edge_max=None, nodecolors = {"gene": "#239756", "geneset": "#3fc37e", "disease": "#5047ee", "drug": "#3026c1", "NA": "#f37855" }):   
+    def plot_graph(self, ax=None, figsize=(6,6), title="", pos=None, close=True, nodetype2color=None, font_size=8, edge_max=None,
+                   nodecolors = {"gene": "#239756", "geneset": "#3fc37e", "disease": "#5047ee", "drug": "#e600e6", "NA": "#f37855" },
+                   nodeshapes = {"gene": "o", "geneset": "s", "disease": "^", "drug": "p", "NA": "o" }):   
                 
         if ax is None:
             fig, ax = plt.subplots(1,1, figsize=figsize)
@@ -607,17 +687,32 @@ class KGraph:
 
         #pos = nx.kamada_kawai_layout(G, pos=nx.spring_layout(G, k=0.15, iterations=20))  # For better example looking
         if pos is None:
-            pos = nx.spring_layout(G, k=0.15, iterations=10)
+            pos = nx.spring_layout(G, k=0.3, iterations=50)
             
         
         nodecolor = None
         if not nodetype2color is None:
-            nodecolor = []
+            nodecolor = {}
             for node in G.nodes:
-                nodecolor.append(nodecolors.get(G.nodes[node].get("type", "NA"), "#f37855"))
-                
+                nodecolor[node] = nodecolors.get(G.nodes[node].get("type", "NA"), "#f37855")
+                                
+        nodeshape = None
+        if not nodeshapes is None:
+            nodeshape = []
             
-        nx.draw_networkx_nodes(G, pos, node_size=100, ax=ax, node_color=nodecolor)
+            nodelists = defaultdict(list)
+            for i,node in enumerate(G.nodes):
+                ns = nodeshapes.get(G.nodes[node].get("type", "NA"), "o")               
+                nodelists[ns].append(node)                
+            
+            for ns in nodelists:
+                nx.draw_networkx_nodes(G, pos, nodelist=nodelists[ns], node_size=100, ax=ax, node_color=[nodecolor[n] for n in nodelists[ns]], node_shape=ns)
+            
+            
+        else:
+            nx.draw_networkx_nodes(G, pos, node_size=100, ax=ax, node_color=[nodecolor[n] for n in G.nodes], node_shape=nodeshape)
+            
+            
         posnodes = {}
         for x in pos:
             posnodes[x] = list(pos[x])
@@ -636,7 +731,7 @@ class KGraph:
             edge_max = max([G.edges[x].get("score", 0) for x in G.edges])
             
         nx.draw_networkx_labels(G, posnodes, labels=nodelabels, font_size=font_size, ax=ax)
-        nx.draw_networkx_edges(G, pos, width=2, edge_vmin=0, edge_vmax=edge_max, edge_cmap = plt.cm.Reds, edge_color=[G.edges[e].get("score", 0) for e in G.edges], ax=ax)
+        nx.draw_networkx_edges(G, pos, width=2, edge_vmin=-0.25, edge_vmax=edge_max, edge_cmap = plt.cm.Reds, edge_color=[G.edges[e].get("score", 0) for e in G.edges], ax=ax)
         ax.set_title(title, loc='left')
         
         if close:
@@ -981,7 +1076,7 @@ class DifferentialModuleIdentifier:
         return scores            
             
     
-    def plot_communities(self, KGs, communitygenes, own, main_net=None, font_size=12, num_columns=4, grid=True, titles=None, nodecolors = {"gene": "#239756", "geneset": "#3fc37e", "disease": "#5047ee", "drug": "#3026c1", "NA": "#f37855" }, outfile=None):
+    def plot_communities(self, KGs, communitygenes, own, main_net=None, font_size=12, num_columns=4, grid=True, titles=None, nodecolors = {"gene": "#239756", "geneset": "#3fc37e", "disease": "#5047ee", "drug": "#3026c1", "NA": "#f37855" }, outfile=None, dpi=500):
 
         assert( own in KGs)
         
@@ -1044,9 +1139,36 @@ class DifferentialModuleIdentifier:
                 plt.gcf().suptitle(title, x=0.025, fontweight="bold")
                     
         if not outfile is None:
-            plt.savefig(outfile + ".png", bbox_inches='tight')
-            plt.savefig(outfile + ".pdf", bbox_inches='tight')
-                    
+            plt.savefig(outfile + ".png", bbox_inches='tight', dpi=dpi)
+            plt.savefig(outfile + ".pdf", bbox_inches='tight', dpi=dpi)
+                        
+                
+            with open(outfile + ".tsv", "w") as fout:
+                
+                print("kgname", "node1", "node1_name", "node1_type", "node1_score", "node2", "node2_name", "node2_type", "node2_score", "edge_score", "edge_type", sep="\t", file=fout)
+                
+                for kgname in KGs:
+                    p_kg = KGs[kgname].get_kg_subgraph(commgenes)
+                    pkg = p_kg.kg
+                    for edge in pkg.edges:
+                        
+                        n1type = pkg.nodes[edge[0]].get("type", edge[0])
+                        if n1type == "gene":
+                            n1score = pkg.nodes[edge[0]].get("expression", {}).get("score", 0.0)
+                        else:
+                            n1score = pkg.nodes[edge[0]].get("score", 0)
+                        
+                        n2type = pkg.nodes[edge[1]].get("type", edge[1])
+                        if n2type == "gene":
+                            n2score = pkg.nodes[edge[1]].get("expression", {}).get("score", 0.0)
+                        else:
+                            n2score = pkg.nodes[edge[1]].get("score", 0)
+                        
+                        print(kgname, edge[0], pkg.nodes[edge[0]].get("name", edge[0]), n1type, n1score,
+                              edge[1], pkg.nodes[edge[1]].get("name", edge[1]), n2type, n2score,
+                              pkg.edges[edge].get("score", 0), pkg.edges[edge].get("type", 0),
+                              sep="\t", file=fout)
+                                        
         plt.show()
         plt.close()
 
