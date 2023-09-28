@@ -27,10 +27,11 @@ def download_and_unzip(download_url_link, dir_path, zipped_filename,destination_
         print("unzipping file starting")
     
         if zipped_filename.endswith(".zip"):
+            print("zipfile")
             with zipfile.ZipFile(os.path.join(dir_path, zipped_filename), "r") as zip_file:
                 zip_file.extractall(os.path.join(dir_path, destination_dir_name))
         elif zipped_filename.endswith(".gz"):
-            print("zipfile")
+            print("gzfile")
             with gzip.GzipFile(os.path.join(dir_path, zipped_filename), "rb") as zip_file:
                 with open(os.path.join(dir_path, destination_dir_name, zipped_filename.replace(".gz", "")), "wb") as fout:
                     fout.write(zip_file.read())
@@ -505,3 +506,113 @@ def load_reactome(kg: nx.DiGraph, data_dir, source="reactome"):
                 kg.add_edge(gene, reactomeID, type="part_of", score=0, source=source)
     
     return kg
+
+
+def load_npinter(kg: nx.DiGraph, data_dir, source="npinter5"):
+
+    npinterFile = os.path.join(data_dir,"interaction_NPInterv5.txt")
+    
+    if not os.path.exists(npinterFile):
+        download_and_unzip("http://bigdata.ibp.ac.cn/npinter5/download/file/interaction_NPInterv5.txt.gz", ".", os.path.join(data_dir,"interaction_NPInterv5.txt.gz"), data_dir, force_zip=True)
+
+
+    df = pd.read_csv(npinterFile, sep="\t")
+    df = df[df.organism == "Homo sapiens"].copy()
+
+    colMap = {
+    'binding; regulatory': 'binding;regulatory',
+    'binding;': "binding"
+    }
+    
+    for x in set(df["class"]):
+        if not x in colMap:
+            colMap[x]=x
+
+
+    df["class"]=df["class"].map(colMap)
+
+    type2kgtype = {
+                    'miRNA': "ncRNA",
+                    'lncRNA': "ncRNA",
+                    'snoRNA': "ncRNA",
+                    'mRNA': "gene",
+                    'snRNA': "ncRNA",
+                    'ncRNA': "ncRNA",
+                    'pseudogene': "gene",
+                    'Pseudogene': "gene",
+                    'circRNA': "ncRNA",
+                    'protein': "gene",
+                    'Protein': "gene",
+                    'sRNA': "ncRNA",
+                    'vtRNAs': "ncRNA",
+                    'piRNAs': "ncRNA",
+                    "DNA": None,
+                    "TF": "gene"
+                  }
+
+    for ri, row in df.iterrows():
+    
+        ncName = row["ncName"]
+        ncID = row["ncID"]
+        ncType = row["ncType"]
+    
+        tarName = row["tarName"]
+        tarID = row["tarID"]
+        tarType = row["tarType"]
+    
+        intClass = row["class"]
+        intID = row["interID"]
+        intSource = row["datasource"]
+    
+        if type(ncID) == float:
+            if np.isnan(ncID):
+                ncID = ncName
+                
+        if type(tarID) == float:
+            if np.isnan(tarID):
+                tarID = tarName
+    
+    
+        if ncName.startswith("hsa-"):
+            ncName = ncName[4:]
+    
+        kgNcType = type2kgtype[ncType]
+        kgTarType = type2kgtype[tarType]
+    
+        if not "gene" in [kgNcType, kgTarType]:
+            continue
+            
+        if None in [kgNcType, kgTarType]:
+            continue
+
+        if not ncName in kg.nodes:
+            kg.add_node(ncName, id=ncID, name=ncName, type=kgNcType, biotype=ncType, score=0)
+    
+        if not tarName in kg.nodes:
+            kg.add_node(tarName, id=tarID, name=tarName, type=kgTarType, biotype=tarType, score=0)
+    
+        kg.add_edge(ncName, tarName, type="interacts", score=0, source="npinter5", source_type=intClass, source_id=intID)
+    
+    return kg
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
