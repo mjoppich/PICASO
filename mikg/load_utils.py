@@ -14,7 +14,7 @@ from goatools.obo_parser import GODag
 import networkx as nx
 
 
-def download_and_unzip(download_url_link, dir_path, zipped_filename,destination_dir_name, unzip=True):
+def download_and_unzip(download_url_link, dir_path, zipped_filename,destination_dir_name, unzip=True, force_zip=False, force_gz=False):
     #https://www.tutorialsbuddy.com/download-and-unzip-a-zipped-file-in-python
     print("Download starting")
 
@@ -26,21 +26,21 @@ def download_and_unzip(download_url_link, dir_path, zipped_filename,destination_
     if unzip:
         print("unzipping file starting")
     
-        if zipped_filename.endswith(".zip"):
-            print("zipfile")
+        if (zipped_filename.endswith(".zip") and not force_gz) or force_zip:
             with zipfile.ZipFile(os.path.join(dir_path, zipped_filename), "r") as zip_file:
                 zip_file.extractall(os.path.join(dir_path, destination_dir_name))
-        elif zipped_filename.endswith(".gz"):
+        elif (zipped_filename.endswith(".gz") and not force_zip) or force_gz:
             print("gzfile")
             with gzip.GzipFile(os.path.join(dir_path, zipped_filename), "rb") as zip_file:
-                with open(os.path.join(dir_path, destination_dir_name, zipped_filename.replace(".gz", "")), "wb") as fout:
+                destname = os.path.join(dir_path, destination_dir_name, os.path.basename(zipped_filename).replace(".gz", ""))
+                print(destname)
+                with open(destname, "wb") as fout:
                     fout.write(zip_file.read())
         else:
             raise NotImplementedError("NO CASE")
             
     
     print("unzipping complete")
-    
     
     
     
@@ -127,7 +127,10 @@ def load_go(kg: nx.DiGraph, data_dir, source="GeneOntology", interaction_harmoni
     
     # add all genes
     for gene in all_genes:
-        kg.add_node(gene, type="gene", score=0)
+        if gene in kg.nodes:
+            kg.nodes[gene]["type"].add("gene")
+        else:
+            kg.add_node(gene, type=set(["gene"]), score=0, name=gene, source=source)
         
     #add GO nodes with attributes
     for goEntry in obodag:
@@ -141,7 +144,7 @@ def load_go(kg: nx.DiGraph, data_dir, source="GeneOntology", interaction_harmoni
         termName = termObj.name
         termNS = str(termObj.namespace)
         
-        kg.add_node(termID, id=termID, name=termName, type="geneset", ns=termNS, score=0, source=source)
+        kg.add_node(termID, id=termID, name=termName, type=set(["geneset"]), ns=termNS, score=0, source=source)
         
     #add GO edges with attributes
     for goEntry in obodag:
@@ -232,12 +235,16 @@ def load_omnipath(kg: nx.DiGraph, data_dir, source="omnipath"):
             continue
             
         for src in srcGenes:
-            if not src in kg.nodes:
-                kg.add_node(src, type="gene", source=source)
+            if src in kg.nodes:
+                kg.nodes[src]["type"].add("gene")
+            else:
+                kg.add_node(src, type=set(["gene"]), source=source, name=src, score=0)
             
         for tgt in tgtGenes:
-            if not tgt in kg.nodes:
-                kg.add_node(tgt, type="gene", source=source)
+            if tgt in kg.nodes:
+                kg.nodes[tgt]["type"].add("gene")
+            else:
+                kg.add_node(tgt, type=set(["gene"]), source=source, name=tgt, score=0)
             
             
     interactionTypes = {} # stimulation, inhibition
@@ -363,11 +370,16 @@ def load_STRING(kg: nx.DiGraph, data_dir, mart_file="oct2014_mart_export.txt", s
                 if t == "":
                     t = tgt
                 
-                if not s in kg.nodes:
-                    kg.add_node(s, type="gene", source=source)
-                if not t in kg.nodes:
-                    kg.add_node(t, type="gene", source=source)
+                if s in kg.nodes:
+                    kg.nodes[s]["type"].add("gene")
+                else:
+                    kg.add_node(s, type=set(["gene"]), source=source, name=s, score=0)
                 
+                if t in kg.nodes:
+                    kg.nodes[t]["type"].add("gene")
+                else:
+                    kg.add_node(t, type=set(["gene"]), source=source, name=t, score=0)
+                                    
                 kg.add_edge( s, t, type="interacts", string_scores=string_scores, source=source, score=0 )
                 
     return kg
@@ -397,10 +409,14 @@ def load_opentargets(kg: nx.DiGraph, data_dir, source="opentargets", min_disease
         disease_label = row["diseaseLabel"]
         
         if not gene in kg.nodes:
-            kg.add_node(gene, type="gene", source=source)
+            kg.add_node(gene, type=set(["gene"]), source=source, name=gene, score=0)
+        else:
+            kg.nodes[gene]["type"].add("gene")
             
         if not disease_id in kg.nodes:
-            kg.add_node(disease_id, type="disease", name=disease_label, source=source)
+            kg.add_node(disease_id, type=set(["disease"]), name=disease_label, source=source)
+        else:
+            kg.nodes[disease_id]["type"].add("disease")
             
             
     #
@@ -418,14 +434,19 @@ def load_opentargets(kg: nx.DiGraph, data_dir, source="opentargets", min_disease
         drugType = row["drugType"]
         
         if not gene in kg.nodes:
-            kg.add_node(gene, type="gene", name=geneName, source=source)
+            kg.add_node(gene, type=set(["gene"]), name=geneName, source=source, score=0)
+        else:
+            kg.nodes[gene]["type"].add("gene")
             
         if not drug in kg.nodes:
-            kg.add_node(drug, type="drug", source=source, name=drugName, drug_type=drugType)
-            
+            kg.add_node(drug, type=set(["drug"]), source=source, name=drugName, drug_type=drugType)
+        else:
+            kg.nodes[drug]["type"].add("drug")
+                
         if not disease_id in kg.nodes:
-            kg.add_node(disease_id, type="disease", name=diseaseName, source=source)
-            
+            kg.add_node(disease_id, type=set(["disease"]), name=diseaseName, source=source)
+        else:
+            kg.nodes[disease_id]["type"].add("disease")
     #
     ## Adding Disease Edges
     #
@@ -496,12 +517,15 @@ def load_reactome(kg: nx.DiGraph, data_dir, source="reactome"):
             reactomeGenes = [x for x in line[2:] if x[0].isupper()]
                 
             if not reactomeID in kg.nodes:
-                kg.add_node(reactomeID, id=reactomeID, type="geneset", name=reactomeLabel, score=0, source=source)
-            
+                kg.add_node(reactomeID, id=reactomeID, type=set(["geneset"]), name=reactomeLabel, score=0, source=source)
+            else:
+                kg.nodes[reactomeID]["type"].add("geneset")
             
             for gene in reactomeGenes:
                 if not gene in kg.nodes:
-                    kg.add_node(gene, type="gene", score=0)
+                    kg.add_node(gene, type=set(["gene"]), name=gene, source=source, score=0)
+                else:
+                    kg.nodes[gene]["type"].add("gene")
                     
                 kg.add_edge(gene, reactomeID, type="part_of", score=0, source=source)
     
@@ -532,22 +556,22 @@ def load_npinter(kg: nx.DiGraph, data_dir, source="npinter5"):
     df["class"]=df["class"].map(colMap)
 
     type2kgtype = {
-                    'miRNA': "ncRNA",
-                    'lncRNA': "ncRNA",
-                    'snoRNA': "ncRNA",
-                    'mRNA': "gene",
-                    'snRNA': "ncRNA",
-                    'ncRNA': "ncRNA",
-                    'pseudogene': "gene",
-                    'Pseudogene': "gene",
+                    'miRNA': ["ncRNA", "miRNA"],
+                    'lncRNA': ["ncRNA", "lncRNA"],
+                    'snoRNA': ["ncRNA"],
+                    'mRNA': ["gene"],
+                    'snRNA': ["ncRNA"],
+                    'ncRNA': ["ncRNA"],
+                    'pseudogene': ["gene"],
+                    'Pseudogene': ["gene"],
                     'circRNA': "ncRNA",
-                    'protein': "gene",
-                    'Protein': "gene",
-                    'sRNA': "ncRNA",
-                    'vtRNAs': "ncRNA",
-                    'piRNAs': "ncRNA",
+                    'protein': ["gene"],
+                    'Protein': ["gene"],
+                    'sRNA': ["ncRNA"],
+                    'vtRNAs': ["ncRNA"],
+                    'piRNAs': ["ncRNA"],
                     "DNA": None,
-                    "TF": "gene"
+                    "TF": ["gene", "TF"]
                   }
 
     for ri, row in df.iterrows():
@@ -576,20 +600,27 @@ def load_npinter(kg: nx.DiGraph, data_dir, source="npinter5"):
         if ncName.startswith("hsa-"):
             ncName = ncName[4:]
     
-        kgNcType = type2kgtype[ncType]
-        kgTarType = type2kgtype[tarType]
+        kgNcTypes = type2kgtype[ncType]
+        kgTarTypes = type2kgtype[tarType]
+        
+        if kgNcTypes is None or kgTarTypes is None:
+            continue
     
-        if not "gene" in [kgNcType, kgTarType]:
+        if not ("gene" in kgNcTypes or "gene" in kgTarTypes):
             continue
             
-        if None in [kgNcType, kgTarType]:
-            continue
+        #if None in kgNcTypes or None in kgTarTypes:
+        #    continue
 
         if not ncName in kg.nodes:
-            kg.add_node(ncName, id=ncID, name=ncName, type=kgNcType, biotype=ncType, score=0)
+            kg.add_node(ncName, id=ncID, name=ncName, type=kgNcTypes, biotype=ncType, score=0, source=source)
+        else:
+            kg.nodes[ncName]["type"].update(kgNcTypes)
     
         if not tarName in kg.nodes:
-            kg.add_node(tarName, id=tarID, name=tarName, type=kgTarType, biotype=tarType, score=0)
+            kg.add_node(tarName, id=tarID, name=tarName, type=kgTarTypes, biotype=tarType, score=0, source=source)
+        else:
+            kg.nodes[tarName]["type"].update(kgTarTypes)
     
         kg.add_edge(ncName, tarName, type="interacts", score=0, source="npinter5", source_type=intClass, source_id=intID)
     
@@ -597,14 +628,75 @@ def load_npinter(kg: nx.DiGraph, data_dir, source="npinter5"):
 
 
 
+def load_kegg(kg: nx.DiGraph, data_dir, source="kegg",
+              hallmark_genesets="kegg_gmts/human/c1.all.v2023.2.Hs.symbols.gmt",
+              curated_genesets="kegg_gmts/human/c2.all.v2023.2.Hs.symbols.gmt"
+              ):
+    
+    hallmark_genesets = os.path.join(data_dir, hallmark_genesets)
+    if not hallmark_genesets is None and not os.path.exists(hallmark_genesets):
+        print("Missing KEGG pathways: hallmark genesets")
+        exit(-1)
+
+    curated_genesets = os.path.join(data_dir, curated_genesets)
+    if not curated_genesets is None and not os.path.exists(os.path.join(data_dir, curated_genesets)):
+        print("Missing KEGG pathways: curated genesets")
+        exit(-1)
+
+    def load_kegg_gmt(infile, kg):
+        
+        with open(infile, "r") as fin:
+            
+            for line in fin:
+                line = line.strip().split("\t")
+                
+                pathway_id = line[0]
+                pathway_genes = line[2:]
+                
+                
+                if not pathway_id in kg.nodes:
+                    kg.add_node(pathway_id, id=pathway_id, type=set(["geneset"]), name=pathway_id, score=0, source=source)
+                else:
+                    kg.nodes[pathway_id]["type"].add("geneset")
+                
+                for gene in pathway_genes:
+                    if not gene in kg.nodes:
+                        kg.add_node(gene, type=set(["gene"]), score=0, name=gene, source=source)
+                    else:
+                        kg.nodes[gene]["type"].add("gene")
+                        
+                    kg.add_edge(gene, pathway_id, type="part_of", score=0, source=source)
+                    
+    load_kegg_gmt(hallmark_genesets, kg)
+    load_kegg_gmt(curated_genesets, kg)
+    
+    return kg
 
 
+def load_human_transcription_factors(kg: nx.DiGraph, data_dir, source="human_transcription_factors"):
 
+    tfURL="http://humantfs.ccbr.utoronto.ca/download/v_1.01/DatabaseExtract_v_1.01.txt"
+    tfFile = os.path.basename(tfURL)
 
+    transcriptionFactorFile = os.path.join(data_dir, tfFile)
+    if not transcriptionFactorFile is None and not os.path.exists(transcriptionFactorFile):
+        tfDB = pd.read_csv(tfURL, sep="\t")
+        tfDB.to_csv(transcriptionFactorFile, sep="\t", index=False)
+        
+    tfDB = pd.read_csv(transcriptionFactorFile, sep="\t")
+    tfs = tfDB[tfDB["Is TF?"] == "Yes"]
 
+    tfgene = set(["gene", "TF"])
 
-
-
+    for ri, row in tfs.iterrows():
+        
+        gene = row["HGNC symbol"]
+        
+        if not gene in kg.nodes:
+            kg.add_node(gene, type=set(tfgene), score=0, name=gene, source=source)
+        else:
+            kg.nodes[gene]["type"].update(tfgene)
+    
 
 
 
