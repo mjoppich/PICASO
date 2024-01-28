@@ -11,6 +11,8 @@ from collections import defaultdict
 from goatools.anno.gaf_reader import GafReader
 from goatools.obo_parser import GODag
 
+from Bio import SeqIO
+
 import networkx as nx
 
 
@@ -191,13 +193,40 @@ def load_omnipath(kg: nx.DiGraph, data_dir, source="omnipath"):
         hgncTranslation = pd.read_csv(hgncURL, sep="\t")
         hgncTranslation.to_csv(hgncTranslationDB, sep="\t")
 
+    if not os.path.exists(os.path.join(data_dir, "miRNA.dat")):
+        download_and_unzip("https://mirbase.org/download/miRNA.dat", ".", os.path.join(data_dir, "miRNA.dat"), ".", unzip=False)
+
     if not os.path.exists(omnipathDB):
         
         import omnipath as op
-        opd = op.interactions.AllInteractions().get()
+        opd = op.interactions.AllInteractions().get(organisms="human", genesymbols=True)
         
         opd.to_csv(omnipathDB, sep="\t")
         
+    MI2entry = {}
+    MIMAT2sym = {}
+    with open(os.path.join(data_dir, "miRNA.dat"), "r") as handle:
+        for record in SeqIO.parse(handle, "embl"):
+
+            if record.annotations["data_file_division"] == "HSA":
+                #print(record.id, len(record))
+        
+                mir_id = record.id
+                mir_name = record.name
+                mir_symbol = "-".join(mir_name.split("-")[1:3])
+        
+                mature_mirs = set()
+                for feature in record.features:
+                    if "accession" in feature.qualifiers:
+                        for acc in feature.qualifiers["accession"]:
+                            mature_mirs.add(acc)
+                    #else:
+                    #    mature_mirs.add("--NA--")
+                
+                MI2entry[mir_id] = {"ID": mir_id, "NAME": mir_name, "SYMBOL": mir_symbol, "matures": mature_mirs}
+
+                for acc in mature_mirs:
+                    MIMAT2sym[acc] = set([mir_symbol])
     
     
     #
@@ -218,6 +247,14 @@ def load_omnipath(kg: nx.DiGraph, data_dir, source="omnipath"):
         
         uniprot2gene[uniprotID].add(hgncGene)
         
+    
+    interactionTypes = {} # stimulation, inhibition
+    interactionTypes[(False, False)] = "interacts"
+    interactionTypes[(False, True)] = "represses"
+    interactionTypes[(True, False)] = "activates"
+    interactionTypes[(True, True)] = "interacts"
+
+    ignoredCount = 0
             
     
     #
@@ -228,44 +265,48 @@ def load_omnipath(kg: nx.DiGraph, data_dir, source="omnipath"):
         srcUID = row["source"]
         tgtUID = row["target"]
         
+        rowType = row["type"]
+        
+        if srcUID.startswith("COMPLEX:") or tgtUID.startswith("COMPLEX:"):
+            continue
+        
+        srcType = set(["gene"])
         srcGenes = uniprot2gene.get(srcUID, set())
+        tgtType = set(["gene"])
         tgtGenes = uniprot2gene.get(tgtUID, set())
+        
+        if len(srcGenes) == 0:
+            srcType = set(["ncRNA", "miRNA"])
+            srcGenes = MIMAT2sym.get(srcUID, set())
+        if len(tgtGenes) == 0:
+            tgtType = set(["ncRNA", "miRNA"])
+            tgtGenes = MIMAT2sym.get(tgtUID, set())
+    
+        if rowType in ["lncrna_post_transcriptional"]:
+            if len(srcGenes) == 0:
+                srcType = set(["ncRNA", "lncRNA"])
+                srcGenes = set([srcUID])
+            if len(tgtGenes) == 0:
+                tgtType = set(["ncRNA", "lncRNA"])
+                tgtGenes = set([tgtUID])
+        
         
         if len(srcGenes) == 0 or len(tgtGenes) == 0:
             continue
             
         for src in srcGenes:
             if src in kg.nodes:
-                kg.nodes[src]["type"].add("gene")
+                kg.nodes[src]["type"].update(srcType)
             else:
-                kg.add_node(src, type=set(["gene"]), source=source, name=src, score=0)
+                kg.add_node(src, type=srcType, source=source, name=src, score=0)
             
         for tgt in tgtGenes:
             if tgt in kg.nodes:
-                kg.nodes[tgt]["type"].add("gene")
+                kg.nodes[tgt]["type"].update(tgtType)
             else:
-                kg.add_node(tgt, type=set(["gene"]), source=source, name=tgt, score=0)
+                kg.add_node(tgt, type=tgtType, source=source, name=tgt, score=0)
             
             
-    interactionTypes = {} # stimulation, inhibition
-    interactionTypes[(False, False)] = "interacts"
-    interactionTypes[(False, True)] = "represses"
-    interactionTypes[(True, False)] = "activates"
-    interactionTypes[(True, True)] = "interacts"
-
-    ignoredCount = 0
-
-    for ri, row in opd.iterrows():
-            
-        srcUID = row["source"]
-        tgtUID = row["target"]
-        
-        srcGenes = uniprot2gene.get(srcUID, set())
-        tgtGenes = uniprot2gene.get(tgtUID, set())
-        
-        if len(srcGenes) == 0 or len(tgtGenes) == 0:
-            continue
-        
         # consensus_direction -> all resources have same direction
         # consensus_stimulation -> all resources show this as stimulation
         # consensus_inhibition -> all resources show this as consensus_inhibition
@@ -298,11 +339,15 @@ def load_omnipath(kg: nx.DiGraph, data_dir, source="omnipath"):
                 
                 if not row["is_directed"]:
                     kg.add_edge(tgt, src, **attrDict)
+            
+       
+       
                     
     return kg
         
         
-def load_STRING(kg: nx.DiGraph, data_dir, mart_file="oct2014_mart_export.txt", source="STRING", use_evidences = ['fusion', 'coexpression','experiments','database','textmining']):
+def load_STRING(kg: nx.DiGraph, data_dir, mart_file="oct2014_mart_export.txt", source="STRING",
+                use_evidences = ['fusion', 'coexpression','experiments','database','textmining']):
 
 
     if not os.path.exists(os.path.join(data_dir, "9606.protein.links.full.txt.gz")):
@@ -315,6 +360,12 @@ def load_STRING(kg: nx.DiGraph, data_dir, mart_file="oct2014_mart_export.txt", s
     subdf["score"] = subdf[use_evidences].max(axis=1)/1000
     subdf = subdf[subdf.score > 0]
     subdf = subdf[subdf.score >= 0.7]
+
+    
+    #low confidence - 0.15 (or better),
+    #medium confidence - 0.4,
+    #high confidence - 0.7,
+    #highest confidence - 0.9.
 
     
     all_ensp_proteins = set()
@@ -360,9 +411,6 @@ def load_STRING(kg: nx.DiGraph, data_dir, mart_file="oct2014_mart_export.txt", s
                     
         for s in src:
             for t in tgt:
-                
-                if s == "PGM3":
-                    print(s, t, string_scores)
                 
                 # fixes empty gene symbols in mart file ...
                 if s == "":
@@ -486,14 +534,24 @@ def load_opentargets(kg: nx.DiGraph, data_dir, source="opentargets", min_disease
         
         evidence_status = row["status"]
         
+        if pd.isna(evidence_status):
+            evidence_status = "Unknown status"
+        
+        if not isinstance(evidence_status, str):
+            print("evnostr", drug, disease_id, drug_target, evidence_status)
+        
+        if "Withdrawn" == evidence_status:
+            #do not include edges
+            continue
+        
         drug_disease_data = {
             "evidence_status": evidence_status,
             "source": source,
-            "type": "affects"
+            "type": "affected_by"
         }
         
-        kg.add_edge( drug, disease_id, **drug_disease_data )
-        kg.add_edge( drug, drug_target, type="targeted_by", source=source )
+        kg.add_edge( disease_id, drug, **drug_disease_data )
+        kg.add_edge( drug_target, drug, type="target_of", source=source )
         
     return kg
         
@@ -564,7 +622,7 @@ def load_npinter(kg: nx.DiGraph, data_dir, source="npinter5"):
                     'ncRNA': ["ncRNA"],
                     'pseudogene': ["gene"],
                     'Pseudogene': ["gene"],
-                    'circRNA': "ncRNA",
+                    'circRNA': ["ncRNA"],
                     'protein': ["gene"],
                     'Protein': ["gene"],
                     'sRNA': ["ncRNA"],
@@ -599,6 +657,14 @@ def load_npinter(kg: nx.DiGraph, data_dir, source="npinter5"):
     
         if ncName.startswith("hsa-"):
             ncName = ncName[4:]
+            
+        if ncID.startswith("NON"):
+            # NONHSAG....
+            ncName = ncID
+        if tarID.startswith("NON"):
+            # NONHSAG....
+            tarName = tarID
+    
     
         kgNcTypes = type2kgtype[ncType]
         kgTarTypes = type2kgtype[tarType]
@@ -608,6 +674,9 @@ def load_npinter(kg: nx.DiGraph, data_dir, source="npinter5"):
     
         if not ("gene" in kgNcTypes or "gene" in kgTarTypes):
             continue
+        
+        kgNcTypes=set(kgNcTypes)
+        kgTarTypes=set(kgTarTypes)
             
         #if None in kgNcTypes or None in kgTarTypes:
         #    continue
@@ -629,8 +698,9 @@ def load_npinter(kg: nx.DiGraph, data_dir, source="npinter5"):
 
 
 def load_kegg(kg: nx.DiGraph, data_dir, source="kegg",
-              hallmark_genesets="kegg_gmts/human/c1.all.v2023.2.Hs.symbols.gmt",
-              curated_genesets="kegg_gmts/human/c2.all.v2023.2.Hs.symbols.gmt"
+              hallmark_genesets="kegg_gmts/human/h.all.v2023.2.Hs.symbols.gmt",
+              curated_genesets="kegg_gmts/human/c2.all.v2023.2.Hs.symbols.gmt",
+              load_reactome=False, load_wp=True
               ):
     
     hallmark_genesets = os.path.join(data_dir, hallmark_genesets)
@@ -652,6 +722,12 @@ def load_kegg(kg: nx.DiGraph, data_dir, source="kegg",
                 
                 pathway_id = line[0]
                 pathway_genes = line[2:]
+                
+                if not load_reactome and pathway_id.startswith("REACTOME_"):
+                    continue
+                
+                if not load_wp and pathway_id.startswith("WP_"):
+                    continue
                 
                 
                 if not pathway_id in kg.nodes:
