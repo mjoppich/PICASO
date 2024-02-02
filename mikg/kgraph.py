@@ -24,6 +24,37 @@ import scipy
 import infomap
 from natsort import natsorted
 
+# from https://stackoverflow.com/questions/25500541/matplotlib-bwr-colormap-always-centered-on-zero
+import matplotlib
+
+class MidpointNormalize(matplotlib.colors.Normalize):
+    def __init__(self, vmin=None, vmax=None, midpoint=None, clip=False):
+        self.midpoint = midpoint
+        matplotlib.colors.Normalize.__init__(self, vmin, vmax, clip)
+
+    def __call__(self, value, clip=None):
+        
+        assert(clip is None)
+        
+        wasScalar = False
+        if isinstance(value, (float, int)):
+            value = np.array([value])
+            wasScalar = True
+
+        allvalues = []
+        for x in value:
+            if x < self.midpoint:
+                allvalues.append( np.interp([x], [self.vmin, self.midpoint], (0, 0.5))[0] )
+            else:
+                allvalues.append( 0.5 + np.interp([x], [self.midpoint, self.vmax], (0, 0.5))[0] )
+
+        if not wasScalar:
+            return np.array(allvalues)
+        
+        return allvalues[0]
+        
+#####
+
 def sjoined(inlist):
     return ";".join([str(x) for x in sorted(set(inlist))])
 
@@ -39,7 +70,29 @@ class KGraph:
         
         self.logger = logging.getLogger(kgraph_name)
         self.logger.setLevel(logging.INFO)
+               
+
+    def is_score_field(self, x):
+        return "score" in x
+    
        
+    def get_node_attributes(self):
+        
+        node_attribs = set()
+        for n in self.kg.nodes:
+            for attrib in self.kg.nodes[n]:
+                node_attribs.add(attrib)
+                
+        return node_attribs
+       
+    def get_edge_attributes(self):
+        
+        edge_attribs = set()
+        for e in self.kg.edges:
+            for attrib in self.kg.edges[e]:
+                edge_attribs.add(attrib)
+                
+        return edge_attribs   
        
     def __repr__(self):
         return "KGraph {} with {} nodes and {} edges".format(self.kgraph_name, len(self.kg.nodes), len(self.kg.edges))
@@ -123,7 +176,7 @@ class KGraph:
         
         return self.kg.nodes[node]
     
-    def get_node_edges(self, node, in_types=None, out_types=None):
+    def get_node_edges(self, node, src_types=None, tgt_types=None):
         
         if not node in self.kg.nodes:
             return None
@@ -131,12 +184,12 @@ class KGraph:
         inEdges = [x for x in self.kg.in_edges(node)]
         outEdges = [x for x in self.kg.out_edges(node)]
         
-        if not in_types is None:
-            in_types = set(in_types)
-            inEdges = [x for x in inEdges if len(in_types.intersection(self.kg.nodes[x[0]]["type"])) > 0]
-        if not out_types is None:
-            out_types = set(out_types)
-            outEdges = [x for x in outEdges if len(out_types.intersection(self.kg.nodes[x[0]]["type"])) > 0]
+        if not src_types is None:
+            src_types = set(src_types)
+            inEdges = [x for x in inEdges if len(src_types.intersection(self.kg.nodes[x[0]]["type"])) > 0]
+        if not tgt_types is None:
+            tgt_types = set(tgt_types)
+            outEdges = [x for x in outEdges if len(tgt_types.intersection(self.kg.nodes[x[0]]["type"])) > 0]
         
         return inEdges + outEdges
     
@@ -145,7 +198,10 @@ class KGraph:
         if nodetype is None:
             return [x for x in self.kg.nodes]
         else:
-            return [ x for x in self.kg.nodes if nodetype in self.kg.nodes[x].get("type", [])]
+            if isinstance(nodetype, str):
+                nodetype = [nodetype]
+            
+            return [ x for x in self.kg.nodes if self.node_type_overlap(x, nodetype)]
     
     def get_nodes_with_highest_scores(self, n=3000, nodetype=None, score_accessor=lambda x: x["score"], node_filter=None):
         
@@ -222,7 +278,27 @@ class KGraph:
                    
         self._plot_pie(counteritems)
        
-    
+    def plot_node_children(self, node_types):
+        
+        scores = []
+        for x in self.get_nodes(node_types):
+            num_Children = len(self.kg.in_edges(x))
+            scores.append(num_Children)
+        
+        fig, ax = plt.subplots(figsize=(8, 4))
+
+        # plot the cumulative histogram
+        n, bins, patches = ax.hist(scores, len(scores), density=True, histtype='step',
+                                cumulative=True, label='Empirical Score Distribution')
+
+        # tidy up the figure
+        ax.grid(True)
+        ax.legend(loc='right')
+        ax.set_title('Cumulative Histogram of Edge Scores')
+        ax.set_xlabel('Score')
+        ax.set_ylabel('Likelihood of Score')
+
+        plt.show()
        
     #
     def plot_edge_types(self):
@@ -337,11 +413,11 @@ class KGraph:
         return srcTypes, tgtTypes
 
 
-    def get_edge_edge_types(self, in_types=None, out_types=None, type_accessor="type", ignore_edge_types=None):
+    def get_edge_edge_types(self, src_types=None, tgt_types=None, type_accessor="type", ignore_edge_types=None):
 
         eetypes = Counter()
         
-        for edge in self.get_edges_between_ntypes(in_types=in_types, out_types=out_types):
+        for edge in self.get_edges_between_ntypes(src_types=src_types, tgt_types=tgt_types):
             
             srcTypes, tgtTypes = self.get_edge_node_types(edge)
             
@@ -421,7 +497,7 @@ class KGraph:
                         
         return allEdges
         
-    def get_edges_between_ntypes(self, in_types, out_types):
+    def get_edges_between_ntypes(self, src_types, tgt_types):
         
         returnEdges=set()
         for edge in self.kg.edges:
@@ -435,15 +511,15 @@ class KGraph:
                 print(edge[1], "is Nonetype")      
                 
                 
-            if not in_types is None:
-                in_types = set(in_types)
-                srcAccept = len(in_types.intersection(self.kg.nodes[edge[0]].get("type", []))) > 0
+            if not src_types is None:
+                src_types = set(src_types)
+                srcAccept = len(src_types.intersection(self.kg.nodes[edge[0]].get("type", []))) > 0
             else:
                 srcAccept = True
                 
-            if not out_types is None:
-                out_types = set(out_types)
-                tgtAccept = len(out_types.intersection(self.kg.nodes[edge[1]].get("type", []))) > 0
+            if not tgt_types is None:
+                tgt_types = set(tgt_types)
+                tgtAccept = len(tgt_types.intersection(self.kg.nodes[edge[1]].get("type", []))) > 0
             else:
                 tgtAccept=True
 
@@ -594,6 +670,33 @@ class KGraph:
 
         plt.show()
         
+
+        
+        
+    def plot_edge_attribute_distribution(self, edge_types=None, score_accessor=lambda x: x.get("score", 0), ax=None, title=None):
+        
+        
+        scores = self.get_edge_scores(edge_types=edge_types, score_accessor=score_accessor)
+     
+        if ax is None:
+            fig, ax = plt.subplots(figsize=(8, 4))
+
+        if title is None:
+            title = 'Score Distribution'
+            
+        # plot the cumulative histogram
+        ax.boxplot( [scores], labels=["Score"] )
+
+        # tidy up the figure
+        ax.grid(True)
+        ax.legend(loc='right')
+        ax.set_title('Boxplot of edge scores')
+        ax.set_xlabel('Node type')
+        ax.set_ylabel('Score')
+        ax.set_xticklabels(ax.get_xticklabels(), rotation = 45, horizontalalignment='right')
+        
+        
+        
     def plot_node_attribute_distribution(self, attribute_accessor, node_types=None, ax=None, title=None):
         
         
@@ -638,6 +741,10 @@ class KGraph:
         scores = []
         for node in nodes:
             scores.append( attribute_accessor( self.kg.nodes[node] ) )
+            
+        if len(scores) == 0:
+            self.logger.info("No nodes selected.")
+            return
                 
         if ax is None:
             fig, ax = plt.subplots(figsize=(8, 4))
@@ -1007,11 +1114,12 @@ class KGraph:
     def get_nx_subgraph(self, genes):
         return self.kg.subgraph(genes).copy() # copy avoids edge view problematics ...
 
-    def plot_graph(self, ax=None, figsize=(6,6), title="", pos=None, close=True, font_size=8, edge_max=None,
+    def plot_graph(self, ax=None, figsize=(6,6), title="", pos=None, close=True, font_size=8,
+                   edge_score_normalizer=None, edge_cmap = plt.cm.Reds,
                    nodetype2color={"gene": "#239756", "geneset": "#3fc37e", "disease": "#5047ee", "drug": "#3026c1", "NA": "#f37855" },
                    nodecolors = {"gene": "#239756", "geneset": "#3fc37e", "disease": "#5047ee", "drug": "#e600e6", "NA": "#f37855" },
                    nodeshapes = {"gene": "o", "geneset": "s", "disease": "^", "drug": "p", "NA": "o" },
-                  score_accessor=lambda x: x.get("score", 0)):   
+                   score_accessor=lambda x: x.get("score", 0)):   
                 
         if ax is None:
             fig, ax = plt.subplots(1,1, figsize=figsize)
@@ -1075,23 +1183,40 @@ class KGraph:
             else:
                 nodelabels[x] = x
             
-        if len(G.edges) == 0:
-            edge_min = -0.25
-        else:
-            edge_min = min([-0.25]+[score_accessor(G.edges[e]) for e in G.edges])
-        
-        if edge_max is None:
-            #print(len(G.edges))
-            if len(G.edges) == 0:
-                edge_max = 1
-            else:
-                edge_max = max([score_accessor(G.edges[e]) for e in G.edges])
+          
                            
         nx.draw_networkx_labels(G, posnodes, labels=nodelabels, font_size=font_size, ax=ax)
-        nx.draw_networkx_edges(G, pos, width=2, edge_vmin=edge_min, edge_vmax=edge_max, edge_cmap = plt.cm.Reds, edge_color=[score_accessor(G.edges[e]) for e in G.edges], ax=ax)
+        
+        edge_scores = [score_accessor(G.edges[e]) for e in G.edges]
+        
+        if not edge_score_normalizer is None:
+            edge_scores = [edge_score_normalizer(x) for x in edge_scores]
+            edge_min = 0.0
+            edge_max = 1.0
+            
+        else:
+            if len(edge_scores) == 0:
+                edge_min = -0.25
+            else:
+                edge_min = np.floor(np.min(edge_scores))
+                
+            if len(edge_scores) == 0:
+                edge_max = 1
+            else:
+                edge_max = np.ceil(np.max(edge_scores))        
+                
+                            
+        nx.draw_networkx_edges(G, pos, width=2, edge_vmin=edge_min, edge_vmax=edge_max, edge_cmap = edge_cmap, edge_color=edge_scores, ax=ax)
         ax.set_title(title, loc='left')
         
         if close:
+            
+            if edge_score_normalizer is None:
+                edge_score_normalizer = plt.Normalize(vmin = edge_min, vmax=edge_max)
+                
+            sm = plt.cm.ScalarMappable(cmap=edge_cmap, norm=edge_score_normalizer)
+            plt.gcf().colorbar(sm, orientation="horizontal", pad=0.1)
+
             plt.show()
             plt.close()
             
@@ -1169,9 +1294,9 @@ class MeanNetworkScorer(NetworkScorer):
 
 
 
-    def score_edges(self, kgraph, value_accessor, edge_accessor, scorers, in_types=None, out_types=None, ignore_edge_types=None):
+    def score_edges(self, kgraph, value_accessor, edge_accessor, scorers, src_types=None, tgt_types=None, ignore_edge_types=None):
         
-        for edge in kgraph.get_edges_between_ntypes(in_types=in_types, out_types=out_types):
+        for edge in kgraph.get_edges_between_ntypes(src_types=src_types, tgt_types=tgt_types):
             
             srcTypes, tgtTypes = kgraph.get_edge_node_types(edge)           
             etypes = set([x for x in product(srcTypes, tgtTypes)])
@@ -1214,14 +1339,14 @@ class MeanNetworkScorer(NetworkScorer):
         
         assert(not scoring_function is None)
         
-        inTypes = [x[0] for x in consider_edge_type]
-        outTypes = [x[1] for x in consider_edge_type]
+        src_types = [x[0] for x in consider_edge_type]
+        tgt_types = [x[1] for x in consider_edge_type]
         
         for node in kgraph.kg.nodes:
             
             if kgraph.get_node_data(node).get("type", None) == ntype:
                 
-                edges = kgraph.get_node_edges(node, in_types=inTypes, out_types=outTypes)
+                edges = kgraph.get_node_edges(node, src_types=src_types, tgt_types=tgt_types)
                 
                 nodeScore = scoring_function(kgraph.kg, node, edges)
                 
@@ -1276,7 +1401,7 @@ class MeanNetworkScorer(NetworkScorer):
                 return x.get("score", 0)
         
         
-        self.score_edges(kgraph, get_score, "type", self.scoring_gene_gene_expression, in_types=["gene"], out_types=["gene"])
+        self.score_edges(kgraph, get_score, "type", self.scoring_gene_gene_expression, src_types=["gene"], tgt_types=["gene"])
     
         _ = kgraph.score_nodes_hierarchically(ntype="geneset", target_ntype="gene")
         _ = kgraph.score_nodes_hierarchically(ntype="disease", target_ntype="gene")
@@ -1302,15 +1427,14 @@ class MeanNetworkScorer(NetworkScorer):
         ## all nodes should have a score by now!
         #
 
-        self.score_edges(kgraph, get_score, "type", self.scoring_interactions, in_types=None, out_types=None, ignore_edge_types=[("gene", "gene")])
+        self.score_edges(kgraph, get_score, "type", self.scoring_interactions, src_types=None, tgt_types=None, ignore_edge_types=[("gene", "gene")])
+        self.calculate_edge_zscores(kgraph, score_accessor="score", edge_accessor="type", src_types=None, tgt_types=None, ignore_edge_types=None)
 
-        self.calculate_edge_zscores(kgraph, score_accessor="score", edge_accessor="type", in_types=None, out_types=None, ignore_edge_types=None)
-
-    def calculate_edge_zscores(self, kgraph, score_accessor, edge_accessor, in_types=None, out_types=None, ignore_edge_types=None):
+    def calculate_edge_zscores(self, kgraph, score_accessor, edge_accessor, src_types=None, tgt_types=None, ignore_edge_types=None):
 
         etype2scores = defaultdict(list)
 
-        for edge in kgraph.get_edges_between_ntypes(in_types=in_types, out_types=out_types):
+        for edge in kgraph.get_edges_between_ntypes(src_types=src_types, tgt_types=tgt_types):
             
             srcTypes, tgtTypes = kgraph.get_edge_node_types(edge)
             edgeType = kgraph.kg.edges[edge].get( edge_accessor , "-")
@@ -1332,7 +1456,7 @@ class MeanNetworkScorer(NetworkScorer):
 
         #print("Identified the following edge types:", *[x for x in etype2scores])
 
-        for edge in kgraph.get_edges_between_ntypes(in_types=in_types, out_types=out_types):
+        for edge in kgraph.get_edges_between_ntypes(src_types=src_types, tgt_types=tgt_types):
             
             srcTypes, tgtTypes = kgraph.get_edge_node_types(edge)
             
@@ -1360,8 +1484,14 @@ class NetworkExtender:
     
     
     def extend_network(self, nodes, fullKG: KGraph, radius=1, scorer:NetworkScorer=None,
-                       min_children_gs=2, minFraction=0.2, minGeneSpec={"geneset": 0.8, "disease": 0.6},
-                       min_edge_score=1.0, score_field="score",
+                       min_children_gs=2,
+                       max_size_gs=100,
+                       minFraction_small = 0.4,
+                       minFraction_large = 0.5,
+                       node_types = ["geneset", "disease", "ncRNA"],
+                       minGeneSpec={"geneset": 0.8, "disease": 0.6},
+                       min_edge_score=1.0,
+                       score_field="score",
                        verbose=False):
         
         orig_kg = fullKG.kg
@@ -1375,12 +1505,13 @@ class NetworkExtender:
             # take all non-gene nodes, but no genesets/diseases
             geneNodes = [x for x in sg.nodes if fullKG.node_type_overlap(x, ["gene", "TF"])]
             
-            acceptNodes = [x for x in sg.nodes if not x in geneNodes]
-            acceptNodes = [x for x in acceptNodes if not fullKG.node_type_overlap(x, ["geneset", "disease", "ncRNA"])]
+            acceptNodes = []
+            #acceptNodes = [x for x in sg.nodes if not x in geneNodes]
+            #acceptNodes = [x for x in acceptNodes if not fullKG.node_type_overlap(x, ["geneset", "disease", "ncRNA", "drug"])]
             
             for n in sg.nodes:
                 nodeTypes = orig_kg.nodes[n].get("type", "")
-                if len(set(["geneset", "disease", "ncRNA"]).intersection(nodeTypes)) > 0:
+                if len(set(node_types).intersection(nodeTypes)) > 0:
                                 
                     geneNeighborsS = [x for x in orig_kg.successors(n) if "gene" in orig_kg.nodes[x].get("type", [])]
                     geneNeighborsP = [x for x in orig_kg.predecessors(n) if "gene" in orig_kg.nodes[x].get("type", [])]
@@ -1410,6 +1541,9 @@ class NetworkExtender:
                     
                     #if len(geneNeighbors) == 0:
                     #    print("zero", n, geneNeighbors)
+                    
+                    if len(geneNeighbors) > max_size_gs:
+                        continue
 
                     accEdges = []
                     #get all edges of n in origkg
@@ -1436,13 +1570,13 @@ class NetworkExtender:
                     
                     if len(geneNeighbors) >= 5:
                         
-                        if fractionNeighbours > minFraction and containedNeighbours >= min_children_gs:
+                        if fractionNeighbours > minFraction_large and containedNeighbours >= min_children_gs:
                             if verbose:
                                 print(n, "large", "\"{}\"".format(fullKG.kg.nodes[n].get("name", n)), len(geneNeighbors), containedNeighbours, fractionNeighbours)
                             acceptNodes.append(n)
                             
                     else:
-                        if fractionNeighbours > (2*minFraction):
+                        if fractionNeighbours > minFraction_small:
                             if verbose:
                                 print(n, "small", "\"{}\"".format(fullKG.kg.nodes[n].get("name", n)), len(geneNeighbors), containedNeighbours, fractionNeighbours)
                             acceptNodes.append(n)
@@ -1464,7 +1598,7 @@ class NetworkExtender:
             
         return okg
     
-    def extend_network_force(self, eKG:KGraph, fullKG:KGraph, nodetype, acceptor=None, edge_acceptor=None):
+    def extend_network_force(self, eKG:KGraph, fullKG:KGraph, nodetype, acceptor=None, edge_acceptor=None, minSpec=0.5):
         
         graphnodes = [x for x in eKG.kg.nodes]
         for n in graphnodes:
@@ -1476,14 +1610,7 @@ class NetworkExtender:
                 if not acceptor is None:
                     if acceptor(oNode, fullKG) == False:
                         continue
-                    
-                if not oNode in eKG.kg.nodes:
-                    print(n, "-->", oNode, fullKG.kg.nodes[oNode])
-                    eKG.kg.add_node(oNode)
-                    
-                    for x in fullKG.kg.nodes[oNode]:
-                        eKG.kg.nodes[oNode][x] = fullKG.kg.nodes[oNode][x]
-                    
+                                        
                 if (n, oNode) in fullKG.kg.edges:
                     edge = (n, oNode)
                 else:
@@ -1493,7 +1620,26 @@ class NetworkExtender:
                 if not edge_acceptor is None:
                     if edge_acceptor(edge, fullKG) == False:
                         continue
+                    
+                ntypes = fullKG.get_node_types(n)
+                
+                ignore=False
+                for ntype in ntypes:
+                    specName = "{}_spec".format(ntype)
+                    if specName in fullKG.kg.nodes[n]:
+                        if fullKG.kg.nodes[n][specName] < minSpec:
+                            ignore = True
 
+                if ignore:
+                    continue
+                
+                print(n, "-->", "({})".format(fullKG.kg.edges[edge]), oNode, fullKG.kg.nodes[oNode])
+
+                if not oNode in eKG.kg.nodes:
+                    eKG.kg.add_node(oNode)
+                    
+                    for x in fullKG.kg.nodes[oNode]:
+                        eKG.kg.nodes[oNode][x] = fullKG.kg.nodes[oNode][x]
                     
                 eKG.kg.add_edge( edge[0], edge[1] )
                     
@@ -1501,11 +1647,123 @@ class NetworkExtender:
                     eKG.kg.edges[(edge[0], edge[1])][x] = fullKG.kg.edges[(edge[0], edge[1])][x]
             
     
+    def extend_nodetypes(self, eKG:KGraph, fullKG:KGraph, nodetype, node_score_accessor=None, edge_score_accessor=None, min_node_score=0.5, verbose=False):
+        
+        exEdgeScores = [edge_score_accessor(eKG.kg.edges[e]) for e in eKG.kg.edges]
+        edgeScoreQuantiles = np.quantile(exEdgeScores, [0.25, 0.75])
+
+        graphnodes = [x for x in eKG.kg.nodes]
+        for n in graphnodes:
+            
+            possibleEdges = fullKG.get_edges_to_type(n, nodetype)
+
+            if len(possibleEdges) == 0:
+                continue
+
+            if node_score_accessor(eKG.kg.nodes[n]) < min_node_score:
+                if verbose:
+                    print(n, "node_score", node_score_accessor(eKG.kg.nodes[n]), "<", min_node_score)
+                continue
+            
+            #print(n, possibleEdges)
+            #print(n)
+            #print(eKG.kg.nodes[n])
+
+            for oNode in possibleEdges:
+                                            
+                if (n, oNode) in fullKG.kg.edges:
+                    edge = (n, oNode)
+                else:
+                    edge = (oNode, n)
+
+                edge_score = edge_score_accessor(fullKG.kg.edges[edge])
+                if edgeScoreQuantiles[0] <= edge_score <= edgeScoreQuantiles[1]:
+               
+                    if verbose:
+                        print(n, "-->", "({})".format(fullKG.kg.edges[edge]), oNode, fullKG.kg.nodes[oNode])
+
+                    if not oNode in eKG.kg.nodes:
+                        eKG.kg.add_node(oNode)
+                        
+                        for x in fullKG.kg.nodes[oNode]:
+                            eKG.kg.nodes[oNode][x] = fullKG.kg.nodes[oNode][x]
+                        
+                    eKG.kg.add_edge( edge[0], edge[1] )
+                        
+                    for x in fullKG.kg.edges[(edge[0], edge[1])]:
+                        eKG.kg.edges[(edge[0], edge[1])][x] = fullKG.kg.edges[(edge[0], edge[1])][x]
+                        
+                else:
+                    if verbose:
+                        print(edge, "score not", edgeScoreQuantiles[0], "<", edge_score, "<", edgeScoreQuantiles[1])
+        
     
 class DifferentialModuleIdentifier:
     
     def __init__(self) -> None:
         pass
+    
+    
+    def scatter_module_scores(self, module_detail):
+        
+        for xi, x in enumerate(module_detail):
+            diffScores = module_detail[x]
+            if xi == 0:
+                baseline = np.array(diffScores["own_scores"])
+
+            plt.scatter(baseline, diffScores["other_scores"], label=x, s=0.1)
+            
+            m, b = np.polyfit(baseline, diffScores["other_scores"], 1)
+
+            xs = np.linspace(min(baseline), max(baseline), 1000)
+            
+            #use red as color for regression line
+            plt.plot(xs, m*xs+b)
+
+        plt.xlabel("Own Scores")
+        plt.ylabel("Other Scores")
+
+        plt.yscale('log')
+        plt.xscale('log')
+
+        plt.legend()
+    
+    
+    def visualize_communities(self, details, title, subsetOrderFunc=None):
+        
+        
+        allSubsets = set()
+
+        for mod in details:
+            for subset in details[mod]:
+                allSubsets.add(subset)
+
+        if not subsetOrderFunc is None:
+            allSubsets = sorted([x for x in allSubsets], key=lambda x: subsetOrderFunc(x))
+
+        modScores = []
+        modNames = []
+        for mod in details:
+
+            means = []
+            medians = []
+            for subset in allSubsets:
+                median = details[mod].get(subset, {}).get("median_other", 0)
+                mean = details[mod].get(subset, {}).get("mean_other", 0)
+
+                means.append(mean)
+                medians.append(median)
+
+            modScores.append( tuple(medians) ) #medians
+            modNames.append(mod)
+            
+        modDF = pd.DataFrame(np.array(modScores).T)
+        modDF.columns = modNames
+        modDF.index = ["{}_median".format(x) for x in allSubsets] #["{}_mean".format(x) for x in allSubsets]
+
+        g = sns.clustermap(modDF, figsize=(12, 4), row_cluster=False, xticklabels=True, yticklabels=True)    
+        g.ax_heatmap.set_title("{} modules".format(title))
+            
     
     def identify_differential_communities(self, communities, ref_kg, KGs, score_field="score", min_nodes=10, min_enriched=0.5, min_effect_size=0.2, all_verbose=False, verbose=False):
         
@@ -1543,18 +1801,23 @@ class DifferentialModuleIdentifier:
             commScores = self.score_subgraphs_for_subnet(otherKGs, communities[cID], score_field=score_field)           
             ownScoresDict = self.score_subgraphs_for_subnet(refKGs, communities[cID], score_field=score_field)
             
+            # list of edge scores!
             ownScores = []
             for x in ownScoresDict:
                 ownScores += ownScoresDict[x]
             
-            diffScores = {}
+            diffScores = defaultdict(dict)
             for x in commScores:
                 diffScores[x] = {}
                 diffScores[x]["median_other"] = np.median(commScores[x])
+                diffScores[x]["mean_other"] = np.mean(commScores[x])
+                
                 diffScores[x]["median_own"] = np.median(ownScores)
                 
                 diffScores[x]["cohend"] = cohend(commScores[x], ownScores)
-                
+                diffScores[x]["subset_scores"] = commScores[x]
+                diffScores[x]["base_scores"] = ownScores
+                                
                 #if np.median(commScores[x]) == 0:
                 #    logFC = 0
                 #else:
@@ -1562,7 +1825,7 @@ class DifferentialModuleIdentifier:
                 #diffScores[x]["logFC"] = logFC
                 
                 diffScores[x]["ks"] = ks_2samp(commScores[x], ownScores)
-                               
+                                                              
             enrichedModule = 0
             for x in diffScores:
                 if abs(diffScores[x]["cohend"]) >= min_effect_size:
@@ -1574,9 +1837,16 @@ class DifferentialModuleIdentifier:
                 relcomms.append(cID)
                 relDetails[cID] = diffScores
                 
+            
             if all_verbose or verbose:
                 if all_verbose or accepted:
                     print("community", cID, len(communities[cID]), accepted)
+                    
+                    # add reference info for accepted
+                    for refName in refKGs:
+                        diffScores[refName]["median_other"] = np.median(ownScoresDict[refName])
+                        diffScores[refName]["mean_other"] = np.mean(ownScoresDict[refName])
+                    
                     for x in diffScores:
                         print(x, diffScores[x])
                 
@@ -1608,7 +1878,10 @@ class DifferentialModuleIdentifier:
         return scores            
             
     
-    def plot_communities(self, KGs, communitygenes, own, main_net=None, font_size=12, num_columns=4, grid=True, titles=None, nodecolors = {"gene": "#239756", "geneset": "#3fc37e", "disease": "#5047ee", "drug": "#3026c1", "NA": "#f37855" }, outfile=None, dpi=500, score_accessor=lambda x: x.get("score", 0)):
+    def plot_communities(self, KGs, communitygenes, own, main_net=None, num_columns=4, grid=True,
+                         titles=None, nodecolors = {"gene": "#239756", "geneset": "#3fc37e", "disease": "#5047ee", "drug": "#3026c1", "NA": "#f37855" },
+                         outfile=None, dpi=500, score_accessor=lambda x: x.get("score", 0),
+                         verbose=False):
 
         assert( own in KGs)
 
@@ -1620,7 +1893,7 @@ class DifferentialModuleIdentifier:
                 numCols = min(len(KGs)+1, num_columns)
                 numRows = math.ceil((len(KGs))/numCols)
                 
-                fig, axs = plt.subplots(numRows, numCols, figsize=(6*numCols, 6*numRows), constrained_layout=True)
+                fig, axs = plt.subplots(numRows, numCols, figsize=(6*numCols, 6*numRows+1), constrained_layout=True)
                 flataxs = axs.flat
             else:
                 if not KGs is None:
@@ -1634,35 +1907,76 @@ class DifferentialModuleIdentifier:
             if not main_net is None:
                 scoreGenes = main_net[ci]
                 
-            
-            
-            ownKG = KGs[own].get_kg_subgraph(commgenes)
-                        
+            ownKG = KGs[own].get_kg_subgraph(commgenes)           
             ownEdgeScore = ownKG.get_edge_scores(nodes=scoreGenes, score_accessor=score_accessor)
+                        
+
+
+            edgeScores = {}      
+            allScores = []          
+            for kgname in KGs:
+                
+                plotKG = KGs[kgname].get_kg_subgraph(commgenes)
+                kgScores = plotKG.get_edge_scores(nodes=scoreGenes, score_accessor=score_accessor)
+                edgeScores[kgname] = kgScores
+                allScores = allScores + list(kgScores)
+                
+            edgeScore_max = 0
+            edgeScore_min = 0
+            edgeScore_median = 0
+            edgeScore_mean = 0
             
-            if len(ownEdgeScore) == 0:
-                ownMax = 1
-                ownMedian = 1
-                ownMean = 1
+            if len(allScores) > 0:
+                edgeScore_max = np.ceil(np.max(allScores))
+                edgeScore_min = np.floor(np.min(allScores))
+                edgeScore_median = np.median(allScores)
+                edgeScore_mean = np.mean(allScores)
+                
+            if verbose:
+                print("Min Score: ", min(allScores), edgeScore_min)
+                print("Max Score: ", max(allScores), edgeScore_max)
+                
+                
+            
+            if edgeScore_min < 0 and edgeScore_max > 0:
+                edge_cmap = plt.cm.coolwarm
+                #edge_score_normalizer = MidpointNormalize(vmin = edgeScore_min, midpoint=0, vmax=edgeScore_max)
+                edge_score_normalizer = matplotlib.colors.TwoSlopeNorm(vmin=edgeScore_min, vcenter=0, vmax=edgeScore_max)
+                
             else:
-                ownMax = max(ownEdgeScore)
-                ownMedian = np.median(ownEdgeScore)
-                ownMean = np.mean(ownEdgeScore)
+                
+                if edgeScore_min < 0 and edgeScore_max < 0:
+                    edge_cmap = matplotlib.cm.get_cmap('Blues_r')
+                else:
+                    edge_cmap = plt.cm.Reds
+                
+                edge_score_normalizer = plt.Normalize(vmin = edgeScore_min, vmax=edgeScore_max)
+                
+            sm = plt.cm.ScalarMappable(cmap=edge_cmap, norm=edge_score_normalizer)
             
-            pos=ownKG.plot_graph( ax=flataxs[0], title="Own (median: {:.3f}, mean {:.3f})".format(ownMedian, ownMean), close=False, nodetype2color=nodecolors, score_accessor=score_accessor)
+            # plot once in order to get node positions!
+            pos=ownKG.plot_graph( ax=flataxs[0], title="--", close=False, nodetype2color=nodecolors, score_accessor=score_accessor)
             flataxs[0].clear()
             
             if not KGs is None:
                 for kgi, kgname in enumerate(KGs):
 
                     plotKG = KGs[kgname].get_kg_subgraph(commgenes)
-
-                    kgScores = plotKG.get_edge_scores(nodes=scoreGenes, score_accessor=score_accessor)
+                    
+                    kgScores = edgeScores[kgname]
                     kgMedian = np.median(kgScores)
                     kgMean = np.mean(kgScores)
-                                                            
-                    _=plotKG.plot_graph( ax=flataxs[kgi], pos=pos, title="{} (median score: {:.3f}, mean {:.3f})".format(kgname, kgMedian, kgMean), close=False, nodetype2color=nodecolors, edge_max=ownMax, score_accessor=score_accessor)
+                    
+                    
+                    _=plotKG.plot_graph( ax=flataxs[kgi], pos=pos, title="{} (median score: {:.3f}, mean {:.3f})".format(kgname, kgMedian, kgMean),
+                                        close=False, nodetype2color=nodecolors,
+                                        edge_score_normalizer=edge_score_normalizer,
+                                        edge_cmap=edge_cmap,
+                                        score_accessor=score_accessor)
             
+            
+
+            plt.gcf().colorbar(sm, orientation="horizontal", pad=0.1)
             
             if grid:
                 #for ax in axs.flat:
@@ -1684,7 +1998,7 @@ class DifferentialModuleIdentifier:
                 
             with open(outfile + ".tsv", "w") as fout:
                 
-                print("kgname", "node1", "node1_name", "node1_type", "node1_score", "node2", "node2_name", "node2_type", "node2_score", "edge_score", "edge_type", sep="\t", file=fout)
+                print("kgname", "node1", "node1_name", "node1_type", "node1_score", "node2", "node2_name", "node2_type", "node2_score", "edge_score", "edge_type", "node1_dict", "node2_dict", "edge_dict", sep="\t", file=fout)
                 
                 for kgname in KGs:
                     p_kg = KGs[kgname].get_kg_subgraph(commgenes)
@@ -1697,9 +2011,11 @@ class DifferentialModuleIdentifier:
                         n2types = pkg.nodes[edge[1]].get("type", [edge[1]])
                         n2score = pkg.nodes[edge[1]].get("score", 0)
                         
-                        print(kgname, edge[0], pkg.nodes[edge[0]].get("name", edge[0]), ";".join(n1types), n1score,
+                        print(kgname,
+                              edge[0], pkg.nodes[edge[0]].get("name", edge[0]), ";".join(n1types), n1score,
                               edge[1], pkg.nodes[edge[1]].get("name", edge[1]), ";".join(n2types), n2score,
                               pkg.edges[edge].get("score", 0), pkg.edges[edge].get("type", 0),
+                              pkg.nodes[edge[0]], pkg.nodes[edge[1]], pkg.edges[edge],
                               sep="\t", file=fout)
                                         
         plt.show()
@@ -1846,6 +2162,7 @@ class DifferentialKG:
         ediffs = self._get_edge_fold_changes(kg1, kg2)
         ndiffs = self._get_node_fold_changes(kg1, kg2)
 
+        #one should only keep non-score fields!!
         dkg = kg1.copy()
         dkg.kgraph_name = "{}_vs_{}".format(kg1.kgraph_name, kg2.kgraph_name)
 

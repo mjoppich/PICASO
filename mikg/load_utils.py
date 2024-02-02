@@ -312,19 +312,30 @@ def load_omnipath(kg: nx.DiGraph, data_dir, source="omnipath"):
         # consensus_inhibition -> all resources show this as consensus_inhibition
         
         # it must have a consensus direction
-        if not (row["consensus_direction"]):
+        if not (row["is_directed"]):
             ignoredCount += 1
             continue
         
         # it must either have consensus stimulation or inhibition
-        if not (row["consensus_stimulation"] or row["consensus_inhibition"]):
-            ignoredCount += 1
-            continue
+        #if not (row["consensus_stimulation"] or row["consensus_inhibition"]):
+        #    ignoredCount += 1
+        #    continue
 
-        interactionType = interactionTypes[ (row["consensus_stimulation"], row["consensus_inhibition"]) ]
+        isStimulation = row["is_stimulation"]
+        isInhibition = row["is_inhibition"]
+
         
         omnipathEvidences = str(row["references"]).strip().split(";")
         omnipathType = row["type"]
+        omnipathSources = row["sources"].split(";")
+        
+        if "miRNA" in srcType and "gene" in tgtType:
+            if len(set(omnipathSources).intersection(["ncRDeathDB", "miRDeathDB", "miR2Disease", "miRecords", "miRTarBase"])) > 0:
+                if not isStimulation and not isInhibition:
+                    isStimulation = False
+                    isInhibition = True
+        
+        interactionType = interactionTypes[ (isStimulation, isInhibition) ]
         
         
         for src in srcGenes:
