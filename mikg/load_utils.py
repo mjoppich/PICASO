@@ -146,7 +146,10 @@ def load_go(kg: nx.DiGraph, data_dir, source="GeneOntology", interaction_harmoni
         termName = termObj.name
         termNS = str(termObj.namespace)
         
-        kg.add_node(termID, id=termID, name=termName, type=set(["geneset"]), ns=termNS, score=0, source=source)
+        termLevel = termObj.level
+        termDepth = termObj.depth
+        
+        kg.add_node(termID, id=termID, name=termName, type=set(["geneset"]), ns=termNS, score=0, source=source, go_level=termLevel, go_depth=termDepth)
         
     #add GO edges with attributes
     for goEntry in obodag:
@@ -317,7 +320,7 @@ def load_omnipath(kg: nx.DiGraph, data_dir, source="omnipath"):
             continue
         
         # it must either have consensus stimulation or inhibition
-        #if not (row["consensus_stimulation"] or row["consensus_inhibition"]):
+        # if not (row["consensus_stimulation"] or row["consensus_inhibition"]):
         #    ignoredCount += 1
         #    continue
 

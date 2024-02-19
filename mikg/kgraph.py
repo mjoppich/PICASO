@@ -21,6 +21,10 @@ import igraph as ig
 
 import markov_clustering as mc
 import scipy
+
+from adjustText import adjust_text
+from sklearn import decomposition
+from sklearn import preprocessing
 import infomap
 from natsort import natsorted
 
@@ -97,9 +101,13 @@ class KGraph:
     def __repr__(self):
         return "KGraph {} with {} nodes and {} edges".format(self.kgraph_name, len(self.kg.nodes), len(self.kg.edges))
        
-    def copy(self):
+    def copy(self, suffix=None):
         
-        ckg = KGraph(random_state=self.random_state)       
+        kgname=self.kgraph_name
+        if not suffix is None:
+            kgname="{}_{}".format(self.kgraph_name, suffix)
+        
+        ckg = KGraph(random_state=self.random_state, kgraph_name=kgname)       
         ckg.kg = self.kg.copy()
         
         return ckg
@@ -245,6 +253,9 @@ class KGraph:
             
         return scored.most_common(n)
         
+    def node_types(self, node):
+        nodeNodeType = self.kg.nodes[node].get("type", [])
+        return nodeNodeType
     
     def get_node_types(self, single=False):
         
@@ -877,6 +888,20 @@ class KGraph:
             
         return self.subset_kg(retainNodes, suffix="filter")
 
+    def filter_edges(self, filter_function):
+        assert(not filter_function is None)
+        
+        removeEdges = list()
+
+        for edge in self.kg.edges:
+            if not filter_function(edge, self):
+                removeEdges.append(edge)
+                    
+        retKG = self.copy(suffix="filter")
+        retKG.kg.remove_edges_from(removeEdges)
+            
+        return retKG
+
 
     def subset_kg(self, retainedNodes, suffix="subset"):
         
@@ -1097,10 +1122,20 @@ class KGraph:
         print("Number of communities:", len(comms))
         
         commSizes = [len(comms[x]) for x in comms]
-        print("Average community size", np.mean(commSizes))
-        print("Median community size", np.median(commSizes))
         quants = [0, 0.25, 0.5, 0.75, 1]
-        print("Quantile ({}) community size".format(",".join([str(x) for x in quants])), np.quantile(commSizes, quants) )
+        
+        if len(commSizes) > 0:
+            commMean = np.mean(commSizes)
+            commMedian = np.median(commSizes)
+            commQuantiles = np.quantile(commSizes, quants)
+        else:
+            commMean = "-"
+            commMedian = "-"
+            commQuantiles = "-"
+        
+        print("Average community size", commMean)
+        print("Median community size", commMedian)
+        print("Quantile ({}) community size".format(",".join([str(x) for x in quants])), commQuantiles)
        
 
     def get_kg_subgraph(self, genes):
@@ -1564,9 +1599,8 @@ class NetworkExtender:
                         containedNeighbours = len(set(geneNeighbors).intersection( nodes ))
                         fractionNeighbours = containedNeighbours/len(geneNeighbors)
                     
-                    if "geneset" in nodeTypes:
-                        if len(geneNeighbors) < min_children_gs:
-                            continue
+                    if len(geneNeighbors) < min_children_gs:
+                        continue
                     
                     if len(geneNeighbors) >= 5:
                         
@@ -1696,15 +1730,15 @@ class NetworkExtender:
                 else:
                     if verbose:
                         print(edge, "score not", edgeScoreQuantiles[0], "<", edge_score, "<", edgeScoreQuantiles[1])
-        
-    
-class DifferentialModuleIdentifier:
+       
+       
+
+class CommunityTool:
     
     def __init__(self) -> None:
         pass
     
-    
-    def scatter_module_scores(self, module_detail):
+    def scatter_community_scores(self, module_detail):
         
         for xi, x in enumerate(module_detail):
             diffScores = module_detail[x]
@@ -1729,7 +1763,7 @@ class DifferentialModuleIdentifier:
         plt.legend()
     
     
-    def visualize_communities(self, details, title, subsetOrderFunc=None):
+    def visualize_communities(self, details, title, subsetOrderFunc=None, field="median"):
         
         
         allSubsets = set()
@@ -1745,46 +1779,247 @@ class DifferentialModuleIdentifier:
         modNames = []
         for mod in details:
 
-            means = []
-            medians = []
+            scores = []
             for subset in allSubsets:
-                median = details[mod].get(subset, {}).get("median_other", 0)
-                mean = details[mod].get(subset, {}).get("mean_other", 0)
+                score = details[mod].get(subset, {}).get("{}_other".format(field), 0)
+                scores.append(score)
 
-                means.append(mean)
-                medians.append(median)
-
-            modScores.append( tuple(medians) ) #medians
+            modScores.append( tuple(scores) ) #medians
             modNames.append(mod)
             
         modDF = pd.DataFrame(np.array(modScores).T)
         modDF.columns = modNames
-        modDF.index = ["{}_median".format(x) for x in allSubsets] #["{}_mean".format(x) for x in allSubsets]
+        modDF.index = ["{} ({})".format(x, field) for x in allSubsets] #["{}_mean".format(x) for x in allSubsets]
 
         g = sns.clustermap(modDF, figsize=(12, 4), row_cluster=False, xticklabels=True, yticklabels=True)    
         g.ax_heatmap.set_title("{} modules".format(title))
             
+         
+    def sort_communities(self, comm_details, details=False):
+        
+        avgCohens = {}
+        for c in comm_details:
+            
+            cohens = []
+            for reg in comm_details[c]:
+                cohens.append( comm_details[c][reg].get("cohend", 0) )
+            
+            avgCohen = sum(cohens)    
+            avgCohen = avgCohen / (len(cohens))
+            
+            avgCohens[c] = avgCohen
+         
+        sortedComms = sorted([x for x in comm_details], key=lambda x: abs(avgCohens[x]), reverse=True)
+        
+        if details:
+            return {x: avgCohens[x] for x in sortedComms}
+        
+        return sortedComms
+       
+    def plot_community(self, KGs, communityNodes, own, main_net=None, num_columns=4,
+                         title=None, nodecolors = {"gene": "#239756", "geneset": "#3fc37e", "disease": "#5047ee", "drug": "#3026c1", "NA": "#f37855" },
+                         outfile=None, dpi=500, score_accessor=lambda x: x.get("score", 0),
+                         verbose=False):
+
+        assert( own in KGs)
+            
+        import math
+        
+        numCols = min(len(KGs)+1, num_columns)
+        numRows = math.ceil((len(KGs))/numCols)
+        
+        fig, axs = plt.subplots(numRows, numCols, figsize=(6*numCols, 6*numRows+1), constrained_layout=True)
+        flataxs = axs.flat
+            
+        # which genes to use for scoring
+        scoreGenes = communityNodes
+        if not main_net is None:
+            scoreGenes = main_net
+            
+        ownKG = KGs[own].get_kg_subgraph(communityNodes)           
+        ownEdgeScore = ownKG.get_edge_scores(nodes=scoreGenes, score_accessor=score_accessor)
+                    
+
+
+        edgeScores = {}      
+        allScores = []          
+        for kgname in KGs:
+            
+            plotKG = KGs[kgname].get_kg_subgraph(communityNodes)
+            kgScores = plotKG.get_edge_scores(nodes=scoreGenes, score_accessor=score_accessor)
+            edgeScores[kgname] = kgScores
+            allScores = allScores + list(kgScores)
+            
+        edgeScore_max = 0
+        edgeScore_min = 0
+        edgeScore_median = 0
+        edgeScore_mean = 0
+        
+        if len(allScores) > 0:
+            edgeScore_max = np.ceil(np.max(allScores))
+            edgeScore_min = np.floor(np.min(allScores))
+            edgeScore_median = np.median(allScores)
+            edgeScore_mean = np.mean(allScores)
+            
+        if verbose:
+            print("Min Score: ", min(allScores), edgeScore_min)
+            print("Max Score: ", max(allScores), edgeScore_max)
+            
+            
+        
+        if edgeScore_min < 0 and edgeScore_max > 0:
+            edge_cmap = plt.cm.coolwarm
+            #edge_score_normalizer = MidpointNormalize(vmin = edgeScore_min, midpoint=0, vmax=edgeScore_max)
+            edge_score_normalizer = matplotlib.colors.TwoSlopeNorm(vmin=edgeScore_min, vcenter=0, vmax=edgeScore_max)
+            
+        else:
+            
+            if edgeScore_min < 0 and edgeScore_max < 0:
+                edge_cmap = matplotlib.cm.get_cmap('Blues_r')
+            else:
+                edge_cmap = plt.cm.Reds
+            
+            edge_score_normalizer = plt.Normalize(vmin = edgeScore_min, vmax=edgeScore_max)
+            
+        sm = plt.cm.ScalarMappable(cmap=edge_cmap, norm=edge_score_normalizer)
+        
+        # plot once in order to get node positions!
+        pos=ownKG.plot_graph( ax=flataxs[0], title="--", close=False, nodetype2color=nodecolors, score_accessor=score_accessor)
+        flataxs[0].clear()
+        
+        if not KGs is None:
+            for kgi, kgname in enumerate(KGs):
+
+                plotKG = KGs[kgname].get_kg_subgraph(communityNodes)
+                
+                kgScores = edgeScores[kgname]
+                kgMedian = np.median(kgScores)
+                kgMean = np.mean(kgScores)
+                
+                
+                _=plotKG.plot_graph( ax=flataxs[kgi], pos=pos, title="{} (median score: {:.3f}, mean {:.3f})".format(kgname, kgMedian, kgMean),
+                                    close=False, nodetype2color=nodecolors,
+                                    edge_score_normalizer=edge_score_normalizer,
+                                    edge_cmap=edge_cmap,
+                                    score_accessor=score_accessor)
+        
+        
+        cbar = fig.colorbar(sm, orientation="horizontal", ax=axs, pad=0.1, shrink=0.3)
+        cbar.ax.set_xlabel("Edge Score".format())
+        
+
+        if not title is None:           
+            #fig.subplots_adjust(top=0.90)
+
+            plt.gcf().suptitle(title, x=0.025, fontweight="bold")
+                    
+        if not outfile is None:
+            plt.savefig(outfile + ".png", bbox_inches='tight', dpi=dpi)
+            plt.savefig(outfile + ".pdf", bbox_inches='tight', dpi=dpi)
+                        
+                
+            with open(outfile + ".tsv", "w") as fout:
+                
+                print("kgname", "node1", "node1_name", "node1_type", "node1_score", "node2", "node2_name", "node2_type", "node2_score", "edge_score", "edge_type", "node1_dict", "node2_dict", "edge_dict", sep="\t", file=fout)
+                
+                for kgname in KGs:
+                    p_kg = KGs[kgname].get_kg_subgraph(communityNodes)
+                    pkg = p_kg.kg
+                    for edge in pkg.edges:
+                        
+                        n1types = pkg.nodes[edge[0]].get("type", [edge[0]])
+                        n1score = pkg.nodes[edge[0]].get("score", 0)
+                        
+                        n2types = pkg.nodes[edge[1]].get("type", [edge[1]])
+                        n2score = pkg.nodes[edge[1]].get("score", 0)
+                        
+                        print(kgname,
+                              edge[0], pkg.nodes[edge[0]].get("name", edge[0]), ";".join(n1types), n1score,
+                              edge[1], pkg.nodes[edge[1]].get("name", edge[1]), ";".join(n2types), n2score,
+                              pkg.edges[edge].get("score", 0), pkg.edges[edge].get("type", 0),
+                              pkg.nodes[edge[0]], pkg.nodes[edge[1]], pkg.edges[edge],
+                              sep="\t", file=fout)
+                                        
+        plt.show()
+        plt.close()
+        
+    def compare_modules(self, comms, figsize=(16, 12)):
+        
+        modules = [x for x in comms]
+
+        simMatrix = np.zeros( (len(modules), len(modules)) )
+
+        for mi1,  mod1 in enumerate(modules):
+            for mi2, mod2 in enumerate(modules):
+
+                overlap = len(set(comms[mod1]).intersection(comms[mod2]))
+                overlap = overlap / len(comms[mod1])
+
+                simMatrix[ mi1, mi2 ] = overlap
+
+
+        fig, ax = plt.subplots(figsize=figsize)
+
+        for row in range(0, simMatrix.shape[0]):
+            x = [i for i in range(0, simMatrix.shape[1])]
+            y = [row] * simMatrix.shape[1]
+            size = [simMatrix[row, i]*50 for i in x]
+            
+            plt.scatter( x, y,  s=size, c="blue")
+
+        
+        ax.xaxis.set_major_locator(matplotlib.ticker.MultipleLocator(1))
+        ax.yaxis.set_major_locator(matplotlib.ticker.MultipleLocator(1))
+
+        plt.xlim(-1, len(modules))
+        plt.ylim(-1, len(modules))
+
+        ax.set_xticklabels(["", ""] + modules + [""], rotation=45, ha='right')
+        ax.set_yticklabels(["", ""] + modules + [""], rotation=0, ha='right')
+
+        #print(ax.get_xticklabels())
+        
+        plt.show()
+        
+        
     
-    def identify_differential_communities(self, communities, ref_kg, KGs, score_field="score", min_nodes=10, min_enriched=0.5, min_effect_size=0.2, all_verbose=False, verbose=False):
+class DifferentialModuleIdentifier:
+    
+    def __init__(self) -> None:
+        pass
+    
+    
+
+            
+    # function to calculate Cohen's d for independent samples
+    # from: https://machinelearningmastery.com/effect-size-measures-in-python/
+    @classmethod
+    def cohend(cls, d1, d2):
+        # calculate the size of samples
+        n1, n2 = len(d1), len(d2)
+        # calculate the variance of the samples
+        s1, s2 = np.var(d1, ddof=1), np.var(d2, ddof=1)
+        # calculate the pooled standard deviation
+        s = np.sqrt(((n1 - 1) * s1 + (n2 - 1) * s2) / (n1 + n2 - 2))
+        # calculate the means of the samples
+        u1, u2 = np.mean(d1), np.mean(d2)
+        # calculate the effect size
+        return (u1 - u2) / s
+            
+    
+    def identify_differential_communities(self, communities, ref_kg, KGs, sort_function=None, score_field="score", min_nodes=10, min_enriched=0.5, min_effect_size=0.2, all_verbose=False, verbose=False):
         
-        from scipy.stats import ks_2samp
         
-        # function to calculate Cohen's d for independent samples
-        def cohend(d1, d2):
-            # calculate the size of samples
-            n1, n2 = len(d1), len(d2)
-            # calculate the variance of the samples
-            s1, s2 = np.var(d1, ddof=1), np.var(d2, ddof=1)
-            # calculate the pooled standard deviation
-            s = np.sqrt(((n1 - 1) * s1 + (n2 - 1) * s2) / (n1 + n2 - 2))
-            # calculate the means of the samples
-            u1, u2 = np.mean(d1), np.mean(d2)
-            # calculate the effect size
-            return (u1 - u2) / s
-        
-        
+        if sort_function is None:
+            
+            def ct_sort_function(rel_details):
+                ct = CommunityTool()
+                return ct.sort_communities(rel_details, details=True)
+            
+            sort_function = ct_sort_function
+
         relcomms = []
-        relDetails = {}
+        reldetails = {}
         
         if type(ref_kg) == str:
             ref_kg = [ref_kg]
@@ -1814,7 +2049,7 @@ class DifferentialModuleIdentifier:
                 
                 diffScores[x]["median_own"] = np.median(ownScores)
                 
-                diffScores[x]["cohend"] = cohend(commScores[x], ownScores)
+                diffScores[x]["cohend"] = self.cohend(commScores[x], ownScores)
                 diffScores[x]["subset_scores"] = commScores[x]
                 diffScores[x]["base_scores"] = ownScores
                                 
@@ -1824,7 +2059,7 @@ class DifferentialModuleIdentifier:
                 #    logFC = np.log2(np.median(commScores[x]) / np.median(ownScores))                               
                 #diffScores[x]["logFC"] = logFC
                 
-                diffScores[x]["ks"] = ks_2samp(commScores[x], ownScores)
+                diffScores[x]["ks"] = scipy.stats.ks_2samp(commScores[x], ownScores)
                                                               
             enrichedModule = 0
             for x in diffScores:
@@ -1835,7 +2070,7 @@ class DifferentialModuleIdentifier:
             if (enrichedModule / len(diffScores)) >= min_enriched:
                 accepted=True                    
                 relcomms.append(cID)
-                relDetails[cID] = diffScores
+                reldetails[cID] = diffScores
                 
             
             if all_verbose or verbose:
@@ -1850,7 +2085,11 @@ class DifferentialModuleIdentifier:
                     for x in diffScores:
                         print(x, diffScores[x])
                 
-        return relcomms, relDetails
+                
+        relcomms = sort_function(reldetails) 
+        reldetails = {x: reldetails[x] for x in relcomms}                
+        
+        return relcomms, reldetails
 
     def score_subgraphs_for_subnet(self, KGs, subnet, score_field="score"):
         
@@ -1876,152 +2115,6 @@ class DifferentialModuleIdentifier:
                 scores[gname].append(escore)
                 
         return scores            
-            
-    
-    def plot_communities(self, KGs, communitygenes, own, main_net=None, num_columns=4, grid=True,
-                         titles=None, nodecolors = {"gene": "#239756", "geneset": "#3fc37e", "disease": "#5047ee", "drug": "#3026c1", "NA": "#f37855" },
-                         outfile=None, dpi=500, score_accessor=lambda x: x.get("score", 0),
-                         verbose=False):
-
-        assert( own in KGs)
-
-        for ci, commgenes in enumerate(communitygenes):
-            
-            if grid:
-                import math
-                
-                numCols = min(len(KGs)+1, num_columns)
-                numRows = math.ceil((len(KGs))/numCols)
-                
-                fig, axs = plt.subplots(numRows, numCols, figsize=(6*numCols, 6*numRows+1), constrained_layout=True)
-                flataxs = axs.flat
-            else:
-                if not KGs is None:
-                    flataxs = [None]*(len(KGs)+1)
-                else:
-                    
-                    flataxs = [None]
-                
-            # which genes to use for scoring
-            scoreGenes = commgenes
-            if not main_net is None:
-                scoreGenes = main_net[ci]
-                
-            ownKG = KGs[own].get_kg_subgraph(commgenes)           
-            ownEdgeScore = ownKG.get_edge_scores(nodes=scoreGenes, score_accessor=score_accessor)
-                        
-
-
-            edgeScores = {}      
-            allScores = []          
-            for kgname in KGs:
-                
-                plotKG = KGs[kgname].get_kg_subgraph(commgenes)
-                kgScores = plotKG.get_edge_scores(nodes=scoreGenes, score_accessor=score_accessor)
-                edgeScores[kgname] = kgScores
-                allScores = allScores + list(kgScores)
-                
-            edgeScore_max = 0
-            edgeScore_min = 0
-            edgeScore_median = 0
-            edgeScore_mean = 0
-            
-            if len(allScores) > 0:
-                edgeScore_max = np.ceil(np.max(allScores))
-                edgeScore_min = np.floor(np.min(allScores))
-                edgeScore_median = np.median(allScores)
-                edgeScore_mean = np.mean(allScores)
-                
-            if verbose:
-                print("Min Score: ", min(allScores), edgeScore_min)
-                print("Max Score: ", max(allScores), edgeScore_max)
-                
-                
-            
-            if edgeScore_min < 0 and edgeScore_max > 0:
-                edge_cmap = plt.cm.coolwarm
-                #edge_score_normalizer = MidpointNormalize(vmin = edgeScore_min, midpoint=0, vmax=edgeScore_max)
-                edge_score_normalizer = matplotlib.colors.TwoSlopeNorm(vmin=edgeScore_min, vcenter=0, vmax=edgeScore_max)
-                
-            else:
-                
-                if edgeScore_min < 0 and edgeScore_max < 0:
-                    edge_cmap = matplotlib.cm.get_cmap('Blues_r')
-                else:
-                    edge_cmap = plt.cm.Reds
-                
-                edge_score_normalizer = plt.Normalize(vmin = edgeScore_min, vmax=edgeScore_max)
-                
-            sm = plt.cm.ScalarMappable(cmap=edge_cmap, norm=edge_score_normalizer)
-            
-            # plot once in order to get node positions!
-            pos=ownKG.plot_graph( ax=flataxs[0], title="--", close=False, nodetype2color=nodecolors, score_accessor=score_accessor)
-            flataxs[0].clear()
-            
-            if not KGs is None:
-                for kgi, kgname in enumerate(KGs):
-
-                    plotKG = KGs[kgname].get_kg_subgraph(commgenes)
-                    
-                    kgScores = edgeScores[kgname]
-                    kgMedian = np.median(kgScores)
-                    kgMean = np.mean(kgScores)
-                    
-                    
-                    _=plotKG.plot_graph( ax=flataxs[kgi], pos=pos, title="{} (median score: {:.3f}, mean {:.3f})".format(kgname, kgMedian, kgMean),
-                                        close=False, nodetype2color=nodecolors,
-                                        edge_score_normalizer=edge_score_normalizer,
-                                        edge_cmap=edge_cmap,
-                                        score_accessor=score_accessor)
-            
-            
-
-            plt.gcf().colorbar(sm, orientation="horizontal", pad=0.1)
-            
-            if grid:
-                #for ax in axs.flat:
-                #    ax.set(xlabel='x-label', ylabel='y-label')
-                #    ax.label_outer()
-                pass
-                    
-            if not titles is None:
-                title = titles[ci]
-                
-                #fig.subplots_adjust(top=0.90)
-
-                plt.gcf().suptitle(title, x=0.025, fontweight="bold")
-                    
-        if not outfile is None:
-            plt.savefig(outfile + ".png", bbox_inches='tight', dpi=dpi)
-            plt.savefig(outfile + ".pdf", bbox_inches='tight', dpi=dpi)
-                        
-                
-            with open(outfile + ".tsv", "w") as fout:
-                
-                print("kgname", "node1", "node1_name", "node1_type", "node1_score", "node2", "node2_name", "node2_type", "node2_score", "edge_score", "edge_type", "node1_dict", "node2_dict", "edge_dict", sep="\t", file=fout)
-                
-                for kgname in KGs:
-                    p_kg = KGs[kgname].get_kg_subgraph(commgenes)
-                    pkg = p_kg.kg
-                    for edge in pkg.edges:
-                        
-                        n1types = pkg.nodes[edge[0]].get("type", [edge[0]])
-                        n1score = pkg.nodes[edge[0]].get("score", 0)
-                        
-                        n2types = pkg.nodes[edge[1]].get("type", [edge[1]])
-                        n2score = pkg.nodes[edge[1]].get("score", 0)
-                        
-                        print(kgname,
-                              edge[0], pkg.nodes[edge[0]].get("name", edge[0]), ";".join(n1types), n1score,
-                              edge[1], pkg.nodes[edge[1]].get("name", edge[1]), ";".join(n2types), n2score,
-                              pkg.edges[edge].get("score", 0), pkg.edges[edge].get("type", 0),
-                              pkg.nodes[edge[0]], pkg.nodes[edge[1]], pkg.edges[edge],
-                              sep="\t", file=fout)
-                                        
-        plt.show()
-        plt.close()
-
-
 
 class GenesetAnnotator:
     
@@ -2215,3 +2308,812 @@ class DifferentialKG:
             resdkgs[case] = self.get_differential_graph(exprKGs[case], exprKGs[base_case])
             
         return resdkgs
+    
+    
+class NETSIM:
+
+    def __init__(self, kg: KGraph, conf_score_accessor=lambda x: 1):
+
+        def filter_func_nodes(node, k:KGraph):
+            if k.node_type_overlap(node, ["gene"]):
+                return True
+
+            if k.node_type_overlap(node, ["geneset"]):
+                if k.kg.nodes[node].get("source", "") == "GeneOntology":
+                    return True
+
+            return False
+        
+        self.kg = kg.filter_nodes(filter_function = filter_func_nodes)
+
+        def filter_func_edges(edge, k:KGraph):
+            e0t = k.node_types(edge[0])
+            e1t = k.node_types(edge[1])
+
+            if "gene" in e0t and "geneset" in e1t:
+                return True
+            if "gene" in e1t and "geneset" in e0t:
+                return True
+            if "geneset" in e0t and "geneset" in e1t:
+                return True
+            return False           
+        
+
+        self.orig_kg = kg
+        self.conf_score_accessor=conf_score_accessor
+        
+        self.kg = self.kg.filter_edges(filter_function = filter_func_edges)
+        self.kg_rev = self.kg.copy("reversed")
+
+        self.kg_rev.kg = nx.DiGraph.reverse(self.kg_rev.kg)
+
+        self.undirected_x = self.kg.kg.to_undirected()
+
+        if not nx.is_directed_acyclic_graph(self.kg.kg):
+            print("WARNING: the KG is not a DAG!")
+        
+        self.max_go_level = 10
+
+        for n in self.kg.kg.nodes:
+            self.max_go_level = max(self.max_go_level, max(self.kg.kg.nodes[n].get("go_level",0 ),self.kg.kg.nodes[n].get("go_depth",0)))
+
+        self.precalculated_term_genes = {}
+
+    def get_annotated_genes(self, ta):
+
+        if ta in self.precalculated_term_genes:
+            return self.precalculated_term_genes[ta]
+            
+        if ta is None:
+            self.precalculated_term_genes[None] = self.kg.get_nodes("gene")
+            return self.precalculated_term_genes[None]
+
+        if self.kg.kg.nodes[ta].get("go_level", 10) <= 4:
+            self.precalculated_term_genes[ta] = self.kg._get_predecessors(ta, ntype="gene", n=self.max_go_level)
+            return self.precalculated_term_genes[ta]
+        else:
+            return self.kg._get_predecessors(ta, ntype="gene", n=self.max_go_level)
+        
+
+
+    def confidence(self, gi, gj):
+
+        edges = []
+        if (gi, gj) in self.orig_kg.kg.edges:
+            edges.append( (gi, gj) )
+        if (gj, gi) in self.orig_kg.kg.edges:
+            edges.append( (gj, gi) )
+
+        confs = []
+        for edge in edges:
+            confs.append( max(0, min(self.conf_score_accessor(self.orig_kg.kg.edges[edge]), 1)) )
+
+        return sum(confs) / len(confs)
+
+    
+    def dij(self, gi, gj):
+        if gi == gj:
+            return 0
+
+        if not ((gi, gj) in self.orig_kg.kg.edges) or not ((gj, gi) in self.orig_kg.kg.edges):
+            return 1
+
+        #gi -> gj or gj -> gi is in orig_kg !
+        return 1.0-self.confidence(gi, gj)
+
+    def functional_distance_genesets(self, ta, tb, ga, gb):
+
+        # first sum
+        dij_a = 0
+        for gi in ga:
+            pgb_dij = 1
+
+            for gj in gb:
+                pgb_dij = pgb_dij * self.dij(gi, gj)
+
+                if pgb_dij == 0:
+                    break
+
+            dij_a += pgb_dij
+
+        # second sum
+        dij_b = 0
+        for gi in gb:
+            pga_dij = 1
+
+            for gj in ga:
+                pga_dij = pga_dij * self.dij(gi, gj)
+
+                if pga_dij == 0:
+                    break
+
+            dij_b += pga_dij
+
+        gab_elems = set(list(ga)+list(gb))
+        dist = (dij_a+dij_b) / (2*len(gab_elems) - dij_a - dij_b)
+
+        return dist
+
+    def get_lca(self, ta, tb):
+        return nx.lowest_common_ancestor(self.kg_rev.kg, ta, tb, default=None)
+
+    def get_shortest_path(self, ta, tb):
+        try:
+            return nx.shortest_path(self.kg.kg, ta, tb)
+        except:
+            return None
+    
+
+    def get_path_constrained_annotation(self, ta, tb, p, verbose=False):
+
+        a_shortest = self.get_shortest_path(ta, p)
+        b_shortest = self.get_shortest_path(tb, p)
+
+        if verbose:
+            print("a_shortest", a_shortest)
+            print("b_shortest", b_shortest)
+
+        ga = self.get_annotated_genes(ta)
+        gb = self.get_annotated_genes(tb)
+
+        if verbose:
+            print("ga", len(ga))
+            print("gb", len(gb))
+
+
+        #rational: if i fetch gp, then all intermediate annotated genes are also contained!
+        gi = set()
+        #if len(ga) > 0 and len(gb) > 0 and len(a_shortest) > 2:
+        #    intermediate_nodes = a_shortest[1:-1]
+        #    
+        #    for ti in intermediate_nodes:
+        #        ni = self.get_annotated_genes(ti)
+        #        gi.update(ni)
+        
+        gj = set()
+        #if len(ga) > 0 and len(gb) > 0 and len(b_shortest) > 2:
+        #    intermediate_nodes = b_shortest[1:-1]
+        #    
+        #    for tj in intermediate_nodes:
+        #        nj = self.get_annotated_genes(tj)
+        #        gj.update(nj)
+
+        gp = []
+        if len(ga) > 0 and len(gb) > 0:
+            gp = self.get_annotated_genes(p)
+        
+        if verbose:    
+            print("gp", len(gp))
+            print("gi", len(gi))
+            print("gj", len(gj))
+        
+        totalset = set()
+        totalset.update(ga)
+        totalset.update(gb)
+        totalset.update(gp)
+        #totalset.update(gi)
+        #totalset.update(gj)
+
+        return ga, gb, gp, totalset
+
+    def get_node_name(self, node):
+        if node in self.kg.kg.nodes:
+            return self.kg.kg.nodes[node]["name"]
+        return "-/-"
+    
+    def functional_similarity(self, ta, tb, verbose=False):
+       
+        p = self.get_lca(ta, tb)
+
+        if verbose:
+            print("ta", ta, self.get_node_name(ta))
+            print("tb", tb, self.get_node_name(tb))
+            print("p", p, self.get_node_name(p))
+
+        if p is None:
+            # there is absolutely no similarity!
+            return 0
+        
+        if ta == tb:
+            return 1
+        
+        G = self.get_annotated_genes(None)
+
+        Ga, Gb, Gp, Utatbp = self.get_path_constrained_annotation(ta, tb, p, verbose=verbose)
+
+        if verbose:    
+            print("LCA", p, self.kg.kg.nodes[p]["name"])
+            print(self.get_shortest_path(ta, tb))
+
+        if len(Ga) == 0 or len(Gb) == 0:
+            return 0
+        
+        dtatb = self.functional_distance_genesets(ta,tb, Ga, Gb) ** 2
+               
+        ftatbp = dtatb * len(Utatbp) + (1-dtatb) * np.sqrt(len(Ga)*len(Gb))
+        htatb = dtatb * len(G) + (1-dtatb) * max(len(Ga), len(Gb))
+    
+        if verbose:
+
+            print("Utatbp=", len(Utatbp))
+            print("dtatb=", dtatb)
+            print("ftatbp=", ftatbp)
+            print("htatb=", htatb)
+
+        sim = ((2 * np.log(len(G))-2*np.log(ftatbp))/(2*np.log(len(G))-(np.log(len(Ga))+np.log(len(Gb)) ))) * (1-( (htatb/len(G)) * (len(Gp)/len(G)) ))
+
+        if verbose:
+            print("sim=", sim)
+
+        return sim
+
+
+    def get_go_level(self, ta):
+        return self.orig_kg.kg.nodes[ta].get("go_level", 0)
+
+    
+    def lca_similarity(self, ta, tb, verbose=False):
+       
+        p = self.get_lca(ta, tb)
+
+        if verbose:
+            print("ta", ta, self.get_node_name(ta), self.get_go_level(ta))
+            print("tb", tb, self.get_node_name(tb), self.get_go_level(tb))
+            print("p", p, self.get_node_name(p), self.get_go_level(p))
+
+        if p is None:
+            # no lca identified
+            return 0.0
+
+        adist = self.get_go_level(ta)-self.get_go_level(p)
+        bdist = self.get_go_level(tb)-self.get_go_level(p)
+
+        total_dist = (adist + bdist) / 2.0
+
+        if total_dist == 0:
+            return 1.0
+
+        sim = 1/total_dist
+
+        return sim
+    
+    def get_relevant_goterms(self, groupKG, verbose=False):
+    
+        allGeneSets = Counter()
+        for node in groupKG.kg.nodes:
+            genesetNeighbours = self.orig_kg.get_edges_to_type(node, "geneset")
+            genesetNeighbours = [x for x in genesetNeighbours if self.orig_kg.kg.nodes[x].get("source", "") == "GeneOntology"]
+    
+            maxGoLevel = 0
+            for x in genesetNeighbours:
+                gol = self.orig_kg.kg.nodes[x].get("go_level", 0)
+                maxGoLevel = max(gol, maxGoLevel)
+    
+            genesetNeighbours = [(x, self.orig_kg.kg.nodes[x].get("go_level", 0)) for x in genesetNeighbours if self.orig_kg.kg.nodes[x].get("go_level", 0) == maxGoLevel]
+                            
+            for n,l in genesetNeighbours:
+                allGeneSets[n] += 1
+    
+        #print(allGeneSets)
+        
+        threshold = np.ceil(len(groupKG.kg.nodes)*0.01)
+        retGeneSets = {}
+        for n in allGeneSets:
+            if not allGeneSets[n] > threshold:
+                continue
+    
+            numGenesetGenes = len(self.orig_kg._get_predecessors(n, ntype="gene"))
+            numOccurences = allGeneSets[n]
+    
+            retGeneSets[n] = (numOccurences, numGenesetGenes)
+    
+        if verbose:
+            print("Threshold", threshold)
+            print("Selected genesets", len(retGeneSets))
+        
+        return retGeneSets
+
+
+    def compare_modules_lca( self, skg1, skg2, verbose=True):
+    
+        group1_terms = self.get_relevant_goterms(skg1, verbose=verbose)
+        group2_terms = self.get_relevant_goterms(skg2, verbose=verbose)
+    
+        total_group1_terms = sum([group1_terms[x][0] for x in group1_terms])
+        total_group2_terms = sum([group2_terms[x][0] for x in group2_terms])
+    
+        if verbose:
+            print("group1 terms", len(group1_terms))
+            print("group2 terms", len(group2_terms))
+    
+        
+        comps = {}
+        for termi in group1_terms:
+            for termj in group2_terms:
+                comps[(termi, termj)] = self.lca_similarity(termi, termj, verbose=verbose)
+        
+        weighted_sim = 0
+        weight_total = 0
+        for comp in comps:
+            weight_g1 = group1_terms[comp[0]][0] / total_group1_terms
+            weight_g2 = group2_terms[comp[1]][0] / total_group2_terms
+            use_weight = weight_g1 * weight_g2
+        
+            if comps[comp] == 0:
+                # assume different concepts!
+                continue
+        
+            weight_total += use_weight
+            weighted_sim = use_weight * comps[comp]
+    
+            if verbose:
+                print(comp[0], self.orig_kg.kg.nodes[comp[0]]["name"], "<->", comp[1], self.orig_kg.kg.nodes[comp[1]]["name"], comps[comp], weight_g1, weight_g2, use_weight)
+    
+        simScore = weighted_sim/weight_total
+            
+        return simScore
+
+    
+    def compare_modules( self, skg1, skg2, verbose=True):
+    
+        group1_terms = self.get_relevant_goterms(skg1, verbose=verbose)
+        group2_terms = self.get_relevant_goterms(skg2, verbose=verbose)
+    
+        total_group1_terms = sum([group1_terms[x][0] for x in group1_terms])
+        total_group2_terms = sum([group2_terms[x][0] for x in group2_terms])
+    
+        if verbose:
+            print("group1 terms", len(group1_terms))
+            print("group2 terms", len(group2_terms))
+    
+        
+        comps = {}
+        for termi in group1_terms:
+            for termj in group2_terms:
+                comps[(termi, termj)] = self.functional_similarity(termi, termj, verbose=verbose)
+        
+        weighted_sim = 0
+        weight_total = 0
+        for comp in comps:
+            weight_g1 = group1_terms[comp[0]][0] / total_group1_terms
+            weight_g2 = group2_terms[comp[1]][0] / total_group2_terms
+            use_weight = weight_g1 * weight_g2
+        
+            if comps[comp] == 0:
+                # assume different concepts!
+                continue
+        
+            weight_total += use_weight
+            weighted_sim = use_weight * comps[comp]
+    
+            if verbose:
+                print(comp[0], self.orig_kg.kg.nodes[comp[0]]["name"], "<->", comp[1], self.orig_kg.kg.nodes[comp[1]]["name"], comps[comp], weight_g1, weight_g2, use_weight)
+    
+        simScore = weighted_sim/weight_total
+            
+        return simScore
+    
+class ModuleCompare:
+
+    def __init__(self):
+        pass
+
+    # applications
+    @classmethod
+    def makeProgressBar(cls) -> progressbar.ProgressBar:
+        return progressbar.ProgressBar(widgets=[
+            progressbar.Bar(), ' ', progressbar.Percentage(), ' ', progressbar.AdaptiveETA()
+            ])
+
+    def draw_network(self, G, title=None):
+        
+        allEdgeWeights = [d["weight"] for (u, v, d) in G.edges(data=True) if d["weight"] > 0]
+        #print(np.quantile(allEdgeWeights, [0, 0.25, 0.5, 0.75, 0.8, 1]))
+        borderWeight = np.quantile(allEdgeWeights, 0.8)
+        
+        elarge = [(u, v) for (u, v, d) in G.edges(data=True) if d["weight"] >= borderWeight]
+        esmall = [(u, v) for (u, v, d) in G.edges(data=True) if 0 < d["weight"] < borderWeight]
+
+        largeNodes = set([x[0] for x in elarge]+[x[1] for x in elarge])
+
+        fig, ax = plt.subplots(figsize=(12, 12))
+        
+        pos = nx.kamada_kawai_layout(G, k=2, seed=7)  # positions for all nodes - seed for reproducibility
+        
+        # nodes
+        nx.draw_networkx_nodes(G, pos, nodelist=largeNodes, node_size=200)
+        nx.draw_networkx_nodes(G, pos, nodelist=[x for x in G.nodes if not x in largeNodes], node_size=100, alpha=0.5)
+        
+        # edges
+        nx.draw_networkx_edges(G, pos, edgelist=elarge, width=6, edge_color="r")
+        nx.draw_networkx_edges(
+            G, pos, edgelist=esmall, width=6, alpha=0.1, edge_color="b", style="dashed"
+        )
+        
+        # node labels
+        nx.draw_networkx_labels(G, pos, font_size=10, font_family="sans-serif")
+        # edge weight labels
+        edge_labels = nx.get_edge_attributes(G, "weight")
+
+        pedge_labels = {}
+        
+        for x in edge_labels:
+            elabel = edge_labels[x]
+
+            if elabel <= 0:
+                continue
+
+            if int(elabel) != elabel:
+                elabel = "{:.3f}".format(elabel)
+
+            pedge_labels[x] = elabel
+        
+        nx.draw_networkx_edge_labels(G, pos, pedge_labels)
+    
+        
+        ax = plt.gca()
+        
+        if not title is None:
+            ax.set_title(title)
+        ax.margins(0.08)
+        plt.axis("off")
+        plt.tight_layout()
+        plt.show()
+
+    
+
+    def network_compare_modules(self, inKGs):
+
+        similarityNetwork = nx.Graph()
+
+        mods = [x for x in inKGs]
+
+        allOverlaps = []
+
+        for i, inMod in enumerate(mods):
+
+            similarityNetwork.add_node(inMod)
+
+            for j in range(i+1, len(mods)):
+                oMod = mods[j]
+                if inMod == oMod:
+                    continue
+
+                if not oMod in similarityNetwork.nodes:
+                    similarityNetwork.add_node(oMod)
+
+
+                node_overlap = set(inKGs[inMod].kg.nodes).intersection(inKGs[oMod].kg.nodes)
+
+                allOverlaps.append(len(node_overlap))
+
+                similarityNetwork.add_edge(inMod, oMod, weight=len(node_overlap))                
+
+        self.draw_network(similarityNetwork, title="Module Overlaps")
+
+
+    def network_compare_lca(self, inKGs, fullKG, ns=None):
+
+        if ns is None:           
+            ns = NETSIM(fullKG)
+
+        modNames = [x for x in inKGs]
+        
+        modComps = {}
+        bar = self.makeProgressBar()
+        allComparisons = [(i,j) for i in range(0, len(modNames)) for j in range(i+1, len(modNames))]
+        for i,j in bar(allComparisons):
+            #print(datetime.fromtimestamp(time.time()))
+        
+            
+            signame1 = modNames[i]
+            signame2 = modNames[j]
+            
+            sig1 = inKGs[signame1]
+            sig2 = v[signame2]
+            modComps[(signame1, signame2)] = ns.compare_modules_lca(sig1, sig2, verbose=False)
+        
+                #print(datetime.fromtimestamp(time.time()))
+        
+        G = nx.Graph()
+        for edge in modComps:
+            G.add_edge( edge[0], edge[1], weight=modComps[edge])
+        
+        self.draw_network(G)
+        
+        return modComps
+    
+    def network_compare_netsim(self, inKGs, fullKG, ns=None):
+
+        if ns is None:           
+            ns = NETSIM(fullKG)
+            
+        modNames = [x for x in inKGs]
+        
+        modComps = {}
+        bar = self.makeProgressBar()
+        allComparisons = [(i,j) for i in range(0, len(modNames)) for j in range(i+1, len(modNames))]
+        for i,j in bar(allComparisons):
+            #print(datetime.fromtimestamp(time.time()))
+        
+            
+            signame1 = modNames[i]
+            signame2 = modNames[j]
+            
+            sig1 = inKGs[signame1]
+            sig2 = v[signame2]
+            modComps[(signame1, signame2)] = ns.compare_modules(sig1, sig2, verbose=False)
+        
+                #print(datetime.fromtimestamp(time.time()))
+        
+        G = nx.Graph()
+        for edge in modComps:
+            G.add_edge( edge[0], edge[1], weight=modComps[edge])
+        
+        self.draw_network(G)
+        
+        return modComps
+    
+
+    def network_compare_distance(self, inKGs, fullKG):
+
+        similarityNetwork = nx.Graph()
+
+        mods = [x for x in inKGs]
+
+        allOverlaps = []
+
+        def get_distance(G, node1, node2):
+            sp = nx.shortest_path(G, source=node1, target=node2)
+            return len(sp)
+
+        undirG = fullKG.kg.to_undirected()
+        
+        for i, inMod in enumerate(mods):
+
+            similarityNetwork.add_node(inMod)
+
+            for j in range(i+1, len(mods)):
+                oMod = mods[j]
+                if inMod == oMod:
+                    continue
+
+                if not oMod in similarityNetwork.nodes:
+                    similarityNetwork.add_node(oMod)
+
+                sMod = inKGs[inMod]
+                tMod = inKGs[oMod]
+                nodeDists = []
+
+                for node1 in sMod.kg.nodes:
+                    for node2 in tMod.kg.nodes:
+
+                        nodeDist = get_distance(undirG, node1, node2)
+                        nodeDists.append(nodeDist)
+                
+
+                
+                meanNodeDist = 1.0/np.quantile(nodeDists, 0.0)
+                #print(inMod, oMod, meanNodeDist)
+
+                similarityNetwork.add_edge(inMod, oMod, weight=meanNodeDist)                
+
+        self.draw_network(similarityNetwork, title="Module Overlaps")
+
+
+    def module_umap(self, sigKG, kg:KGraph):
+
+        nodeList = [x for x in kg.kg.nodes]
+        cluster_names = [x for x in sigKG]
+        cluster_labels = [x.split("_")[0] for x in sigKG]
+        
+        # rows, cols
+        moduleDF = pd.DataFrame(np.zeros((len(nodeList), len(sigKG)), dtype=np.uint8))
+        moduleDF.index = nodeList
+        moduleDF.columns = cluster_names
+                
+
+        for comm in cluster_names:
+            commNodes = [x for x in sigKG[comm].kg.nodes]
+
+            moduleDF.loc[commNodes, comm] = 1
+        
+        #print(moduleDF.head())
+        #print(moduleDF.sum(axis=0))
+
+        from sklearn import decomposition
+        from sklearn import preprocessing
+
+        scalar = preprocessing.StandardScaler()
+        standardized_data = scalar.fit_transform(moduleDF.T)
+
+        pca = decomposition.PCA(n_components=2)
+        pca_data = pca.fit_transform(standardized_data)
+
+        fig, ax = plt.subplots(figsize=(12,12))
+        
+        df = pd.DataFrame(pca_data)
+        df.index = cluster_names
+        df.columns = ["pca0", "pca1"]
+        df["Module"] = cluster_names
+        df["label"] = cluster_labels
+        df['label'] = df['label'].astype('category')
+
+        
+        
+        df.plot.scatter("pca0", "pca1", c="label", colormap='viridis', ax=ax)
+
+        texts = []
+        for x, y, s in zip(df["pca0"], df["pca1"], df["Module"]):
+            texts.append(plt.text(x, y, s,fontproperties={'size' : 6}))
+            
+        adjust_text(texts, force_points=0.2, force_text=0.2,
+            expand_points=(1, 1), expand_text=(1, 1),
+            arrowprops=dict(arrowstyle="-", color='black', lw=0.5))
+        plt.show()
+        plt.close()
+        
+        #pca = decomposition.PCA(n_components=30)
+        #pca_data = pca.fit_transform(standardized_data)
+        #print("pca data", pca_data.shape)
+        
+        #import umap
+        #reducer = umap.UMAP(
+        #                    n_neighbors=5,
+        #                    min_dist=0.8
+        #                   )
+        #embedding = reducer.fit(pca_data)
+        #print("umap embedding", embedding)
+
+        #import umap.plot      
+        #umap.plot.points(embedding, labels=np.array(cluster_labels), background='black')
+        #umap.plot.connectivity(embedding, show_points=True, edge_bundling='hammer')
+
+
+
+class CRankExplorer:
+
+    def __init__(self):
+        pass
+
+
+    def calculate_connectivity(self, kg:KGraph):
+
+        nodeDegrees = [x[1] for x in nx.degree(kg.kg)]
+        return np.mean(nodeDegrees)
+
+
+    def calculate_density(self, communityKG:KGraph, edge_score_accessor):
+
+        allEdgeScores = []
+        for edge in communityKG.kg.edges:
+            edgeScore = abs(edge_score_accessor(communityKG.kg.edges[edge]))
+            allEdgeScores.append(edgeScore)
+
+        #print("density", np.quantile(allEdgeScores, [0, 0.2, 0.5, 0.8, 1.0]))
+        return np.mean(allEdgeScores)
+
+    def calculate_boundary(self, community, fullKG:KGraph, edge_score_accessor, density):
+
+        allOutEdgeScores = []
+        for node in community:
+            for edge in fullKG.kg.out_edges(node):
+                edgeScore = abs(edge_score_accessor(fullKG.kg.edges[edge]))
+                allOutEdgeScores.append(edgeScore)
+        
+        #print("boundary", np.quantile(allOutEdgeScores, [0, 0.2, 0.5, 0.8, 1.0]))
+        return np.mean(allOutEdgeScores)
+                
+
+    def calculate_allegiance(self, community, fullKG:KGraph):
+
+        prefs = []
+        for node in community:
+
+            commEdgesCount = 0
+            outEdgesCount = 0
+
+            outEdges = fullKG.kg.out_edges(node)
+            
+            if len(outEdges) == 0:
+                continue
+            
+            for edge in outEdges:
+                if edge[0] in community and edge[1] in community:
+                    commEdgesCount += 1
+                else:
+                    outEdgesCount += 1
+
+            prefWithinCommunity = commEdgesCount / (commEdgesCount+outEdgesCount)
+            prefs.append(prefWithinCommunity)
+
+        #print("allegiance", np.quantile(prefs, [0, 0.2, 0.5, 0.8, 1.0]))
+        return np.mean(prefs)
+
+    def evaluate_community(self, community, fullKG: KGraph, edge_score_accessor=lambda x: x["score"]):#, node_score_accessor=lambda x: x["score"]):
+
+        communityKG = fullKG.subset_kg(community)
+        #undirKG:nx.Graph = communityKG.kg.to_undirected()
+
+        connectivityScore = self.calculate_connectivity(communityKG)
+        densityScore = self.calculate_density(communityKG, edge_score_accessor)
+        boundaryScore = self.calculate_boundary(community, fullKG, edge_score_accessor, densityScore)
+        allegianceScore = self.calculate_allegiance(community, fullKG)
+
+
+        return {
+            "connectivity_score": connectivityScore,
+            "density_score": densityScore,
+            "boundary_score": boundaryScore,
+            "allegiance_score": allegianceScore,
+        }
+
+
+    def evaluate_communities(self, sigKGs, fullKGs):
+
+        commScores = []
+        for comm in sigKGs:
+        
+            mainGraph = comm.split("_mod_")[0]
+            #print(comm, mainGraph)
+
+            mainKG = fullKGs.get(mainGraph, None)
+
+            if mainKG is None:
+                print("Not a valid graph", mainGraph)
+                continue
+          
+            commScore = cr.evaluate_community(set(sigKG[comm].kg.nodes), mainKG, edge_score_accessor=lambda x: x["fc_score"])
+            commScore["module"] = comm
+            commScores.append(commScore)
+        
+        commScoreDF = pd.DataFrame(commScores)
+
+        for score in commScoreDF.columns:
+            if not score.endswith("_score"):
+                continue
+                
+            commScoreDF["{}_rank".format(score)] = commScoreDF[score].rank(ascending=False)    
+                
+        rankCols = [x for x in commScoreDF.columns if x.endswith("_rank")]
+        commScoreDF["rank_mean"] = commScoreDF[rankCols].mean(axis=1)
+        
+        commScoreDF.sort_values("rank_mean", inplace=True)
+        return commScoreDF
+
+
+    def plot_scores( scoreDF ):
+
+
+        moduleDF = scoreDF[[x for x in scoreDF.columns if x.endswith("_score")]]
+
+        scalar = preprocessing.StandardScaler()
+        standardized_data = scalar.fit_transform(moduleDF)
+
+        pca = decomposition.PCA(n_components=2)
+        pca_data = pca.fit_transform(standardized_data)
+
+
+        fig, ax = plt.subplots(figsize=(12,12))
+        
+        df = pd.DataFrame(pca_data)
+        
+        df.index = scoreDF["module"]
+        df.columns = ["pc0", "pc1"]
+        df["Module"] = list(scoreDF["module"])
+        df["label"] = [x.split("_")[0] for x in df["Module"]]
+        df['label'] = df['label'].astype('category')
+        
+        df.plot.scatter("pc0", "pc1", c="label", colormap='viridis', ax=ax)
+
+        texts = []
+        for x, y, s in zip(df["pc0"], df["pc1"], df["Module"]):
+            texts.append(plt.text(x, y, s,fontproperties={'size' : 6}))
+            
+        adjust_text(texts, force_points=0.2, force_text=0.2,
+            expand_points=(1, 1), expand_text=(1, 1),
+            arrowprops=dict(arrowstyle="-", color='black', lw=0.5))
+        plt.show()
+        plt.close()
+
+
