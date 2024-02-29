@@ -28,6 +28,9 @@ from sklearn import preprocessing
 import infomap
 from natsort import natsorted
 
+import networkx as nx
+import progressbar
+
 # from https://stackoverflow.com/questions/25500541/matplotlib-bwr-colormap-always-centered-on-zero
 import matplotlib
 
@@ -1150,11 +1153,16 @@ class KGraph:
         return self.kg.subgraph(genes).copy() # copy avoids edge view problematics ...
 
     def plot_graph(self, ax=None, figsize=(6,6), title="", pos=None, close=True, font_size=8,
-                   edge_score_normalizer=None, edge_cmap = plt.cm.Reds,
+                   edge_score_normalizer=None,
+                   node_score_normalizer=None,
+                   edge_cmap = plt.cm.Reds,
+                   max_node_size = 200,
                    nodetype2color={"gene": "#239756", "geneset": "#3fc37e", "disease": "#5047ee", "drug": "#3026c1", "NA": "#f37855" },
                    nodecolors = {"gene": "#239756", "geneset": "#3fc37e", "disease": "#5047ee", "drug": "#e600e6", "NA": "#f37855" },
                    nodeshapes = {"gene": "o", "geneset": "s", "disease": "^", "drug": "p", "NA": "o" },
-                   score_accessor=lambda x: x.get("score", 0)):   
+                   edge_score_accessor=lambda x: x.get("score", 0),
+                   node_score_accessor=lambda x: x.get("score", 0)
+                   ):   
                 
         if ax is None:
             fig, ax = plt.subplots(1,1, figsize=figsize)
@@ -1171,12 +1179,21 @@ class KGraph:
             nodecolor = {}
             for node in G.nodes:
                 nodecolor[node] = nodecolors.get(sorted(G.nodes[node].get("type", ["NA"]))[0], "#f37855")
-                                
+                
+        if node_score_normalizer is None:         
+            allNodeScores = [node_score_accessor(G.nodes[node]) for node in G.nodes]
+            node_score_normalizer = plt.Normalize(vmin = min(allNodeScores), vmax=max(allNodeScores))
+            
+        node_size_func = lambda x: 50 + max_node_size*node_score_normalizer(x)
+        
+                                        
         nodeshape = None
         if not nodeshapes is None:
             nodeshape = []
             
             nodelists = defaultdict(list)
+            nodesizes = defaultdict(list)
+            
             for i,node in enumerate(G.nodes):
                 
                 nodeNodeTypes = G.nodes[node].get("type", ["NA"])
@@ -1186,18 +1203,24 @@ class KGraph:
                         if ntype in nodeshapes:
                             ns = nodeshapes.get(ntype, "o")               
                             nodelists[ns].append(node)
+                            nodesizes[ns].append( node_size_func(node_score_accessor(G.nodes[node])) )
                             continue
                 else:
                     ntype = "NA"
                     ns = nodeshapes.get(ntype, "o")               
                     nodelists[ns].append(node)
+                    nodesizes[ns].append( node_size_func(node_score_accessor(G.nodes[node])) )
             
             for ns in nodelists:
-                nx.draw_networkx_nodes(G, pos, nodelist=nodelists[ns], node_size=100, ax=ax, node_color=[nodecolor[n] for n in nodelists[ns]], node_shape=ns)
+                nx.draw_networkx_nodes(G, pos, nodelist=nodelists[ns], node_size=nodesizes[ns], ax=ax, node_color=[nodecolor[n] for n in nodelists[ns]], node_shape=ns)
             
             
         else:
-            nx.draw_networkx_nodes(G, pos, node_size=100, ax=ax, node_color=[nodecolor[n] for n in G.nodes], node_shape=nodeshape)
+            nodesizes = []
+            for node in G.nodes:
+                nodesizes.append( node_size_func(node_score_accessor(G.nodes[node])) )
+                        
+            nx.draw_networkx_nodes(G, pos, node_size=nodesizes, ax=ax, node_color=[nodecolor[n] for n in G.nodes], node_shape=nodeshape)
             
             
         posnodes = {}
@@ -1222,7 +1245,7 @@ class KGraph:
                            
         nx.draw_networkx_labels(G, posnodes, labels=nodelabels, font_size=font_size, ax=ax)
         
-        edge_scores = [score_accessor(G.edges[e]) for e in G.edges]
+        edge_scores = [edge_score_accessor(G.edges[e]) for e in G.edges]
         
         if not edge_score_normalizer is None:
             edge_scores = [edge_score_normalizer(x) for x in edge_scores]
@@ -1250,7 +1273,39 @@ class KGraph:
                 edge_score_normalizer = plt.Normalize(vmin = edge_min, vmax=edge_max)
                 
             sm = plt.cm.ScalarMappable(cmap=edge_cmap, norm=edge_score_normalizer)
-            plt.gcf().colorbar(sm, orientation="horizontal", pad=0.1)
+            cbar = plt.gcf().colorbar(sm, orientation="horizontal", pad=0.1, ax=ax, shrink=1.0)
+            cbar.ax.set_xlabel("Edge Score".format())
+            
+            l = matplotlib.ticker.MaxNLocator(nbins=5)
+            l.create_dummy_axis()
+            newticks = l.tick_values(edge_min, edge_max)
+            cbar.ax.set_xticks(newticks)
+            
+            
+            def get_legend(norm, ax, num=5):
+                
+                sizes = np.linspace(norm.vmin, norm.vmax, num)
+                
+                plotsizes = [node_size_func(x) for x in sizes]
+
+                xsizes = [i for i in range(0, len(sizes))]
+                ysizes = [0]*len(sizes)
+                sc = ax.scatter(xsizes, ysizes, s=plotsizes, color='#239756')
+                
+                for i, (xi, yi) in enumerate(zip(xsizes, ysizes)):
+                    plt.text(xi, yi-0.05, "{:.3f}".format(sizes[i]), va='bottom', ha='center', fontsize="small")
+
+                ax.get_xaxis().set_visible(False)
+                ax.get_yaxis().set_visible(False)
+                ax.spines['top'].set_visible(False)
+                ax.spines['right'].set_visible(False)
+                ax.spines['bottom'].set_visible(False)
+                ax.spines['left'].set_visible(False)
+            
+            from mpl_toolkits.axes_grid1 import make_axes_locatable
+            divider = make_axes_locatable(cbar.ax)
+            sax = divider.append_axes('right', size='100%', pad=0.2)
+            get_legend(node_score_normalizer, sax)
 
             plt.show()
             plt.close()
@@ -1818,7 +1873,9 @@ class CommunityTool:
        
     def plot_community(self, KGs, communityNodes, own, main_net=None, num_columns=4,
                          title=None, nodecolors = {"gene": "#239756", "geneset": "#3fc37e", "disease": "#5047ee", "drug": "#3026c1", "NA": "#f37855" },
-                         outfile=None, dpi=500, score_accessor=lambda x: x.get("score", 0),
+                         outfile=None, dpi=500,
+                         edge_score_accessor=lambda x: x.get("score", 0),
+                         node_score_accessor=lambda x: x.get("score", 0),
                          verbose=False):
 
         assert( own in KGs)
@@ -1837,35 +1894,46 @@ class CommunityTool:
             scoreGenes = main_net
             
         ownKG = KGs[own].get_kg_subgraph(communityNodes)           
-        ownEdgeScore = ownKG.get_edge_scores(nodes=scoreGenes, score_accessor=score_accessor)
+        ownEdgeScore = ownKG.get_edge_scores(nodes=scoreGenes, score_accessor=edge_score_accessor)
                     
 
 
         edgeScores = {}      
-        allScores = []          
+        allEdgeScores = []
+        allNodeScores = []    
         for kgname in KGs:
             
             plotKG = KGs[kgname].get_kg_subgraph(communityNodes)
-            kgScores = plotKG.get_edge_scores(nodes=scoreGenes, score_accessor=score_accessor)
+            kgScores = plotKG.get_edge_scores(nodes=scoreGenes, score_accessor=edge_score_accessor)
             edgeScores[kgname] = kgScores
-            allScores = allScores + list(kgScores)
+            allEdgeScores = allEdgeScores + list(kgScores)
+            allNodeScores = [node_score_accessor(plotKG.kg.nodes[node]) for node in plotKG.kg.nodes] + allNodeScores
             
         edgeScore_max = 0
         edgeScore_min = 0
-        edgeScore_median = 0
-        edgeScore_mean = 0
         
-        if len(allScores) > 0:
-            edgeScore_max = np.ceil(np.max(allScores))
-            edgeScore_min = np.floor(np.min(allScores))
-            edgeScore_median = np.median(allScores)
-            edgeScore_mean = np.mean(allScores)
+        if len(allEdgeScores) > 0:
+            edgeScore_max = np.ceil(np.max(allEdgeScores))
+            edgeScore_min = np.floor(np.min(allEdgeScores))
             
         if verbose:
-            print("Min Score: ", min(allScores), edgeScore_min)
-            print("Max Score: ", max(allScores), edgeScore_max)
+            print("Min Edge Score: ", min(allEdgeScores), edgeScore_min)
+            print("Max Edge Score: ", max(allEdgeScores), edgeScore_max)
             
+           
+        
+        
+        nodeScore_max = 0
+        nodeScore_min = 0   
+        if len(allNodeScores) > 0:
+            nodeScore_max = np.ceil(np.max(allNodeScores))
+            nodeScore_min = np.floor(np.min(allNodeScores))
+          
+        node_score_normalizer = plt.Normalize(vmin = nodeScore_min, vmax=nodeScore_max)
             
+        if verbose:
+            print("Min Node Score: ", min(allNodeScores), nodeScore_min)
+            print("Max Node Score: ", max(allNodeScores), nodeScore_max) 
         
         if edgeScore_min < 0 and edgeScore_max > 0:
             edge_cmap = plt.cm.coolwarm
@@ -1884,8 +1952,10 @@ class CommunityTool:
         sm = plt.cm.ScalarMappable(cmap=edge_cmap, norm=edge_score_normalizer)
         
         # plot once in order to get node positions!
-        pos=ownKG.plot_graph( ax=flataxs[0], title="--", close=False, nodetype2color=nodecolors, score_accessor=score_accessor)
+        pos=ownKG.plot_graph(ax=flataxs[0], title="--", close=False,
+                             nodetype2color=nodecolors, edge_score_accessor=edge_score_accessor)
         flataxs[0].clear()
+        max_node_size=200
         
         if not KGs is None:
             for kgi, kgname in enumerate(KGs):
@@ -1900,13 +1970,57 @@ class CommunityTool:
                 _=plotKG.plot_graph( ax=flataxs[kgi], pos=pos, title="{} (median score: {:.3f}, mean {:.3f})".format(kgname, kgMedian, kgMean),
                                     close=False, nodetype2color=nodecolors,
                                     edge_score_normalizer=edge_score_normalizer,
+                                    node_score_normalizer=node_score_normalizer,
                                     edge_cmap=edge_cmap,
-                                    score_accessor=score_accessor)
+                                    edge_score_accessor=edge_score_accessor,
+                                    node_score_accessor=node_score_accessor,
+                                    max_node_size=max_node_size)
         
         
         cbar = fig.colorbar(sm, orientation="horizontal", ax=axs, pad=0.1, shrink=0.3)
         cbar.ax.set_xlabel("Edge Score".format())
         
+        if edgeScore_min == 0:
+            edgeScore_min = -1
+        
+        #cbarxticks = list(cbar.ax.get_xticks())
+        #print("CbarTicks Orig", cbarxticks)
+        #if not edgeScore_min in cbarxticks:
+        #    cbarxticks.append(edgeScore_min)
+        #if not edgeScore_max in cbarxticks:
+        #    cbarxticks.append(edgeScore_max)
+        #cbarxticks = sorted(cbarxticks)
+        #print("CbarTicks", cbarxticks)
+        #cbar.ax.set_xticks(cbarxticks)
+
+        node_size_func = lambda x: 50 + max_node_size*node_score_normalizer(x)
+
+
+        def get_legend(norm, ax, num=5):
+            
+            sizes = np.linspace(norm.vmin, norm.vmax, num)
+            
+            plotsizes = [node_size_func(x) for x in sizes]
+
+            xsizes = [i for i in range(0, len(sizes))]
+            ysizes = [0]*len(sizes)
+            sc = ax.scatter(xsizes, ysizes, s=plotsizes, color='#239756')
+            
+            for i, (xi, yi) in enumerate(zip(xsizes, ysizes)):
+                plt.text(xi, yi-0.05, "{:.3f}".format(sizes[i]), va='bottom', ha='center', fontsize="small")
+
+            ax.get_xaxis().set_visible(False)
+            ax.get_yaxis().set_visible(False)
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            ax.spines['bottom'].set_visible(False)
+            ax.spines['left'].set_visible(False)
+        
+        from mpl_toolkits.axes_grid1 import make_axes_locatable
+        divider = make_axes_locatable(cbar.ax)
+        sax = divider.append_axes('right', size='100%', pad=0.2)
+        get_legend(node_score_normalizer, sax)
+
 
         if not title is None:           
             #fig.subplots_adjust(top=0.90)
@@ -2577,7 +2691,7 @@ class NETSIM:
 
         return sim
     
-    def get_relevant_goterms(self, groupKG, verbose=False):
+    def get_relevant_goterms(self, groupKG, max_terms=None, verbose=False):
     
         allGeneSets = Counter()
         for node in groupKG.kg.nodes:
@@ -2598,7 +2712,7 @@ class NETSIM:
         
         threshold = np.ceil(len(groupKG.kg.nodes)*0.01)
         retGeneSets = {}
-        for n in allGeneSets:
+        for n, ncount in allGeneSets.most_common(max_terms):
             if not allGeneSets[n] > threshold:
                 continue
     
@@ -2614,10 +2728,10 @@ class NETSIM:
         return retGeneSets
 
 
-    def compare_modules_lca( self, skg1, skg2, verbose=True):
+    def compare_modules_lca( self, skg1, skg2, max_terms=None, verbose=True):
     
-        group1_terms = self.get_relevant_goterms(skg1, verbose=verbose)
-        group2_terms = self.get_relevant_goterms(skg2, verbose=verbose)
+        group1_terms = self.get_relevant_goterms(skg1, max_terms=max_terms, verbose=verbose)
+        group2_terms = self.get_relevant_goterms(skg2, max_terms=max_terms, verbose=verbose)
     
         total_group1_terms = sum([group1_terms[x][0] for x in group1_terms])
         total_group2_terms = sum([group2_terms[x][0] for x in group2_terms])
@@ -2649,15 +2763,19 @@ class NETSIM:
             if verbose:
                 print(comp[0], self.orig_kg.kg.nodes[comp[0]]["name"], "<->", comp[1], self.orig_kg.kg.nodes[comp[1]]["name"], comps[comp], weight_g1, weight_g2, use_weight)
     
+    
+        if weight_total == 0:
+            return 0
+        
         simScore = weighted_sim/weight_total
             
         return simScore
 
     
-    def compare_modules( self, skg1, skg2, verbose=True):
+    def compare_modules( self, skg1, skg2, max_terms=None, verbose=True):
     
-        group1_terms = self.get_relevant_goterms(skg1, verbose=verbose)
-        group2_terms = self.get_relevant_goterms(skg2, verbose=verbose)
+        group1_terms = self.get_relevant_goterms(skg1, max_terms=max_terms, verbose=verbose)
+        group2_terms = self.get_relevant_goterms(skg2, max_terms=max_terms, verbose=verbose)
     
         total_group1_terms = sum([group1_terms[x][0] for x in group1_terms])
         total_group2_terms = sum([group2_terms[x][0] for x in group2_terms])
@@ -2689,6 +2807,10 @@ class NETSIM:
             if verbose:
                 print(comp[0], self.orig_kg.kg.nodes[comp[0]]["name"], "<->", comp[1], self.orig_kg.kg.nodes[comp[1]]["name"], comps[comp], weight_g1, weight_g2, use_weight)
     
+    
+        if weight_total == 0:
+            return 0
+        
         simScore = weighted_sim/weight_total
             
         return simScore
@@ -2718,7 +2840,7 @@ class ModuleCompare:
 
         fig, ax = plt.subplots(figsize=(12, 12))
         
-        pos = nx.kamada_kawai_layout(G, k=2, seed=7)  # positions for all nodes - seed for reproducibility
+        pos = nx.spring_layout(G, k=2, seed=7)  # positions for all nodes - seed for reproducibility
         
         # nodes
         nx.draw_networkx_nodes(G, pos, nodelist=largeNodes, node_size=200)
@@ -2738,6 +2860,9 @@ class ModuleCompare:
         pedge_labels = {}
         
         for x in edge_labels:
+            if not x in elarge:
+                continue
+            
             elabel = edge_labels[x]
 
             if elabel <= 0:
@@ -2762,13 +2887,15 @@ class ModuleCompare:
 
     
 
-    def network_compare_modules(self, inKGs):
+    def network_compare_modules(self, inKGs, measure="jaccard"):
+        
+        assert (measure in ["jaccard", "sorensen"])
 
         similarityNetwork = nx.Graph()
 
         mods = [x for x in inKGs]
 
-        allOverlaps = []
+        modSims = {}
 
         for i, inMod in enumerate(mods):
 
@@ -2782,21 +2909,63 @@ class ModuleCompare:
                 if not oMod in similarityNetwork.nodes:
                     similarityNetwork.add_node(oMod)
 
+                inSet = set(inKGs[inMod].kg.nodes)
+                oSet = set(inKGs[oMod].kg.nodes)
 
-                node_overlap = set(inKGs[inMod].kg.nodes).intersection(inKGs[oMod].kg.nodes)
+                node_overlap = inSet.intersection(oSet)
+                node_union = inSet.union(oSet)
 
-                allOverlaps.append(len(node_overlap))
+                similarity = None
+                if measure == "jaccard":
+                    similarity = len(node_overlap) / len( node_union )
+                elif measure == "sorensen":
+                    similarity = (2.0*len(node_overlap)) / ( len(inSet) + len(oSet) )
 
-                similarityNetwork.add_edge(inMod, oMod, weight=len(node_overlap))                
+                #allOverlaps.append(len(node_overlap))
+
+                modSims[(inMod, oMod)] = similarity
+                similarityNetwork.add_edge(inMod, oMod, weight=similarity)                
 
         self.draw_network(similarityNetwork, title="Module Overlaps")
+        return modSims
 
-
-    def network_compare_lca(self, inKGs, fullKG, ns=None):
+    def network_compare_lca(self, inKGs, max_terms=None, fullKG=None, ns=None):
+        
+        assert(not (fullKG is None and ns is None))
 
         if ns is None:           
             ns = NETSIM(fullKG)
 
+        modNames = [x for x in inKGs]
+        
+        modComps = {}
+        bar = self.makeProgressBar()
+        allComparisons = [(i,j) for i in range(0, len(modNames)) for j in range(i+1, len(modNames))]
+        for i,j in bar(allComparisons):      
+            
+            signame1 = modNames[i]
+            signame2 = modNames[j]
+            
+            sig1 = inKGs[signame1]
+            sig2 = inKGs[signame2]
+            modComps[(signame1, signame2)] = ns.compare_modules_lca(sig1, sig2, max_terms=max_terms, verbose=False)
+                
+        G = nx.Graph()
+        for edge in modComps:
+            G.add_edge( edge[0], edge[1], weight=modComps[edge])
+        
+        self.draw_network(G)
+        
+        return modComps
+    
+    def network_compare_netsim(self, inKGs, max_terms=None, fullKG=None, ns=None):
+
+        assert(not (fullKG is None and ns is None))
+
+
+        if ns is None:           
+            ns = NETSIM(fullKG)
+            
         modNames = [x for x in inKGs]
         
         modComps = {}
@@ -2810,8 +2979,8 @@ class ModuleCompare:
             signame2 = modNames[j]
             
             sig1 = inKGs[signame1]
-            sig2 = v[signame2]
-            modComps[(signame1, signame2)] = ns.compare_modules_lca(sig1, sig2, verbose=False)
+            sig2 = inKGs[signame2]
+            modComps[(signame1, signame2)] = ns.compare_modules(sig1, sig2, max_terms=max_terms, verbose=False)
         
                 #print(datetime.fromtimestamp(time.time()))
         
@@ -2823,83 +2992,6 @@ class ModuleCompare:
         
         return modComps
     
-    def network_compare_netsim(self, inKGs, fullKG, ns=None):
-
-        if ns is None:           
-            ns = NETSIM(fullKG)
-            
-        modNames = [x for x in inKGs]
-        
-        modComps = {}
-        bar = self.makeProgressBar()
-        allComparisons = [(i,j) for i in range(0, len(modNames)) for j in range(i+1, len(modNames))]
-        for i,j in bar(allComparisons):
-            #print(datetime.fromtimestamp(time.time()))
-        
-            
-            signame1 = modNames[i]
-            signame2 = modNames[j]
-            
-            sig1 = inKGs[signame1]
-            sig2 = v[signame2]
-            modComps[(signame1, signame2)] = ns.compare_modules(sig1, sig2, verbose=False)
-        
-                #print(datetime.fromtimestamp(time.time()))
-        
-        G = nx.Graph()
-        for edge in modComps:
-            G.add_edge( edge[0], edge[1], weight=modComps[edge])
-        
-        self.draw_network(G)
-        
-        return modComps
-    
-
-    def network_compare_distance(self, inKGs, fullKG):
-
-        similarityNetwork = nx.Graph()
-
-        mods = [x for x in inKGs]
-
-        allOverlaps = []
-
-        def get_distance(G, node1, node2):
-            sp = nx.shortest_path(G, source=node1, target=node2)
-            return len(sp)
-
-        undirG = fullKG.kg.to_undirected()
-        
-        for i, inMod in enumerate(mods):
-
-            similarityNetwork.add_node(inMod)
-
-            for j in range(i+1, len(mods)):
-                oMod = mods[j]
-                if inMod == oMod:
-                    continue
-
-                if not oMod in similarityNetwork.nodes:
-                    similarityNetwork.add_node(oMod)
-
-                sMod = inKGs[inMod]
-                tMod = inKGs[oMod]
-                nodeDists = []
-
-                for node1 in sMod.kg.nodes:
-                    for node2 in tMod.kg.nodes:
-
-                        nodeDist = get_distance(undirG, node1, node2)
-                        nodeDists.append(nodeDist)
-                
-
-                
-                meanNodeDist = 1.0/np.quantile(nodeDists, 0.0)
-                #print(inMod, oMod, meanNodeDist)
-
-                similarityNetwork.add_edge(inMod, oMod, weight=meanNodeDist)                
-
-        self.draw_network(similarityNetwork, title="Module Overlaps")
-
 
     def module_umap(self, sigKG, kg:KGraph):
 
@@ -2969,7 +3061,22 @@ class ModuleCompare:
         #umap.plot.points(embedding, labels=np.array(cluster_labels), background='black')
         #umap.plot.connectivity(embedding, show_points=True, edge_bundling='hammer')
 
+    def plot_dendrogram(self, simDict):
+        allModules = natsorted(set([x[0] for x in simDict]+[x[1] for x in simDict]))
+        simMatrix = np.zeros( (len(allModules), len(allModules)) )
 
+        for mod1, mod2 in simDict:
+            simMatrix[ allModules.index(mod1), allModules.index(mod2) ] = simDict[(mod1, mod2)]
+            simMatrix[ allModules.index(mod2), allModules.index(mod1) ] = simDict[(mod1, mod2)]
+
+            
+
+        simVec = scipy.spatial.distance.squareform(simMatrix)
+        linkage =  scipy.cluster.hierarchy.linkage(1 - simVec)
+        dendro  =  scipy.cluster.hierarchy.dendrogram(linkage, labels=allModules)
+        
+        plt.gca().set_xticklabels(plt.gca().get_xticklabels(), rotation = 45, ha="right")
+        plt.show()
 
 class CRankExplorer:
 
@@ -3063,7 +3170,7 @@ class CRankExplorer:
                 print("Not a valid graph", mainGraph)
                 continue
           
-            commScore = cr.evaluate_community(set(sigKG[comm].kg.nodes), mainKG, edge_score_accessor=lambda x: x["fc_score"])
+            commScore = self.evaluate_community(set(sigKGs[comm].kg.nodes), mainKG, edge_score_accessor=lambda x: x["fc_score"])
             commScore["module"] = comm
             commScores.append(commScore)
         
@@ -3082,7 +3189,7 @@ class CRankExplorer:
         return commScoreDF
 
 
-    def plot_scores( scoreDF ):
+    def plot_scores( self, scoreDF ):
 
 
         moduleDF = scoreDF[[x for x in scoreDF.columns if x.endswith("_score")]]
