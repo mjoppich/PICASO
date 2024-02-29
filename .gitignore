@@ -1,7 +1,9 @@
 data
 opentargets
 .pybiomart.sqlite
-
+MI_output
+mi_diff_fibroblasts
+mi_diff_cardiomyocyte
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
