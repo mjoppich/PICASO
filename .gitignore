@@ -5,6 +5,12 @@ MI_output
 mi_diff_fibroblasts
 mi_diff_cardiomyocyte
 
+hmi/*
+kpmp/*
+
+*.tar.gz
+*.tsv
+
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

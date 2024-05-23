@@ -12,6 +12,7 @@ from goatools.anno.gaf_reader import GafReader
 from goatools.obo_parser import GODag
 
 from Bio import SeqIO
+import re
 
 import networkx as nx
 
@@ -181,6 +182,123 @@ def load_go(kg: nx.DiGraph, data_dir, source="GeneOntology", interaction_harmoni
                 kg.add_edge( gene, goID, type=interaction_harmonize[interaction[0]], go_interaction = interaction[0], source=source)
 
     return kg
+
+
+def load_uniprot_location(kg: nx.DiGraph, data_dir, source="uniprot_celloc"):
+    
+    uniprotDB = os.path.join(data_dir, "uniprot_cellular_location.obo")
+    if not os.path.exists(uniprotDB):
+        uniprotURL = "https://rest.uniprot.org/locations/stream?format=obo&query=%28*%29"
+        download_and_unzip(uniprotURL, data_dir, "uniprot_cellular_location.obo", unzip=False)
+        
+    uniprotData = os.path.join(data_dir, "uniprot_cellular_location.tsv")
+    if not os.path.exists(uniprotData):
+        uniprotDataURL = "https://rest.uniprot.org/uniprotkb/stream?fields=accession%2Creviewed%2Cid%2Cgene_names%2Corganism_name%2Cgene_primary%2Ccc_subcellular_location&format=tsv&query=%28%28proteome%3AUP000005640%29%29"
+        df = pd.read_csv(uniprotDataURL, sep="\t")
+        df.to_csv(uniprotData, sep="\t", index=False)
+        
+    
+    uniprotdag = GODag(uniprotDB, optional_attrs=['relationship', "xref"])
+    df = pd.read_csv(uniprotData, sep="\t").replace({np.nan: None})
+
+    ccName2ID = {}
+    for upEnty in uniprotdag:
+        
+        termID = upEnty
+        termObj = uniprotdag[upEnty]
+        
+        if termObj.is_obsolete:
+            continue
+        
+        termName = termObj.name
+        termNS = str(termObj.namespace)
+        
+        termLevel = termObj.level
+        termDepth = termObj.depth
+        
+        ccName2ID[termName] = termID
+
+        kg.add_node(termID, id=termID, name=termName, type=set(["geneset", "subcellular_location"]), ns=termNS, score=0, source=source, term_level=termLevel, term_depth=termDepth)
+        
+        
+    for upEnty in uniprotdag:
+        
+        termID = upEnty
+        termObj = uniprotdag[upEnty]
+        
+
+        for parID in [x.id for x in termObj.parents]:
+            if parID in kg.nodes:
+                kg.add_edge(termID, parID, type="relevant_in", score=0, source=source)
+            
+        for xref in [x for x in termObj.xref]:
+            if xref in kg.nodes:
+                kg.add_edge(termID, xref, type="relevant_in", score=0, source=source)
+                
+        for relID in [x.id for x in termObj.relationship.get("part_of", [])]:
+            if relID in kg.nodes:
+                kg.add_edge(termID, relID, type="part_of", score=0, source=source)
+        
+            
+    def extract_subcellular_annotation(inStr):
+        allAnnots = []
+        for annotation in inStr.split("SUBCELLULAR LOCATION: "):
+            if len(annotation) == 0:
+                continue
+            
+            if annotation.startswith("["):
+                annotation = annotation.split("]:")[1]
+                
+            if "Note=" in annotation:
+                annotation = annotation.split("Note=")[0]
+            
+            annots = [item for sublist in [x.strip().split(" {")[0].split(", ") for x in re.split(r"(;\s)|(\.\s)", annotation) if not x is None and "{" in x] for item in sublist]
+            allAnnots.extend(annots)
+        return allAnnots  
+            
+
+    for ri, row in df.iterrows():
+        
+        geneSymbols = row["Gene Names (primary)"]
+        geneLoc = row["Subcellular location [CC]"]
+        
+        if geneSymbols is None:
+            continue
+        
+        if geneLoc is None:
+            continue
+        
+        geneSymbols = geneSymbols.split("; ")
+        
+        #if not geneSymbol in kg.nodes:
+        #    continue
+        
+        geneLocs = extract_subcellular_annotation(geneLoc)
+                    
+                    
+        for geneSymbol in geneSymbols:
+            
+            if not geneSymbol in kg.nodes:
+                kg.add_node(geneSymbol, type=set(["gene"]), source=source, name=geneSymbol, score=0)
+            
+            for geneLoc in geneLocs:
+                
+                if not geneLoc in ccName2ID:
+                    geneLoc = geneLoc[0].upper() + geneLoc[1:]
+                            
+                if not geneLoc in ccName2ID:
+                    print(geneSymbol, geneLocs)
+                
+                locID = ccName2ID[geneLoc]
+                
+                if locID is None:
+                    continue
+                
+                kg.add_edge(geneSymbol, locID, type="part_of", score=0, source=source)
+                
+    return kg
+        
+        
             
 def load_omnipath(kg: nx.DiGraph, data_dir, source="omnipath"):
     

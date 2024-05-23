@@ -6,6 +6,7 @@ import pickle
 
 from .load_utils import *
 import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
 from collections import Counter, defaultdict
 import seaborn as sns
 from itertools import chain
@@ -14,6 +15,7 @@ import community
 import glob
 import random
 import json
+import re
 
 from itertools import product
 import leidenalg as la
@@ -118,7 +120,12 @@ class KGraph:
     def print_kg_info(self):
         self.logger.info("Current KG {}".format(str(self.kg)))
         
-    def load_kgraph_base(self, data_dir, go=True, TFs=True, omnipath=True, opentargets=True, reactome=True, kegg=True, STRING=True, NPINTER=True, ot_min_disease_assoc_score=0.8, hallmark_genesets="kegg_gmts/human/c1.all.v2023.2.Hs.symbols.gmt", curated_genesets="kegg_gmts/human/c2.all.v2023.2.Hs.symbols.gmt"):
+    def load_kgraph_base(self, data_dir,
+                         go=True, TFs=True, omnipath=True, opentargets=True,
+                         reactome=True, kegg=True, uniprot_loc=True, STRING=True, NPINTER=False,
+                         ot_min_disease_assoc_score=0.8,
+                         hallmark_genesets="kegg_gmts/human/c1.all.v2023.2.Hs.symbols.gmt",
+                         curated_genesets="kegg_gmts/human/c2.all.v2023.2.Hs.symbols.gmt"):
         
         self.data_dir = data_dir
 
@@ -163,6 +170,11 @@ class KGraph:
             load_npinter(self.kg, self.data_dir)
             self.print_kg_info()
             
+        if uniprot_loc:
+            self.logger.info("Loading Uniprot Cellular Location")
+            load_uniprot_location(self.kg, self.data_dir)
+            self.print_kg_info()
+            
         #remove singletons
         remove = [node for node,degree in dict(self.kg.degree()).items() if degree < 1]
         print("Removing {} singletons".format(len(remove)))
@@ -205,7 +217,7 @@ class KGraph:
         return inEdges + outEdges
     
     
-    def get_nodes(self, nodetype):
+    def get_nodes(self, nodetype=None):
         if nodetype is None:
             return [x for x in self.kg.nodes]
         else:
@@ -256,8 +268,12 @@ class KGraph:
             
         return scored.most_common(n)
         
-    def node_types(self, node):
+    def node_types(self, node, single=False):
         nodeNodeType = self.kg.nodes[node].get("type", [])
+        
+        if single:
+            nodeNodeType = sjoined(nodeNodeType)
+            
         return nodeNodeType
     
     def get_node_types(self, single=False):
@@ -283,17 +299,16 @@ class KGraph:
             
         return nodeTypes
        
-    def plot_node_types(self):
+    def plot_node_types(self, show_threshold=0.02):
         
         ntCounter = self.get_node_types()
         
         counteritems = [("{}\nn={}".format(x, ntCounter[x]), ntCounter[x]) for x in ntCounter]
-        counteritems = sorted(counteritems, key=lambda x: x[1])
-                   
-        self._plot_pie(counteritems)
        
-    def plot_node_children(self, node_types):
-        
+        self._plot_pie(counteritems, show_threshold=show_threshold)
+       
+    def plot_node_children(self, node_types=None):
+                
         scores = []
         for x in self.get_nodes(node_types):
             num_Children = len(self.kg.in_edges(x))
@@ -303,70 +318,87 @@ class KGraph:
 
         # plot the cumulative histogram
         n, bins, patches = ax.hist(scores, len(scores), density=True, histtype='step',
-                                cumulative=True, label='Empirical Score Distribution')
+                                cumulative=True, label='In-Edges')
 
         # tidy up the figure
         ax.grid(True)
         ax.legend(loc='right')
-        ax.set_title('Cumulative Histogram of Edge Scores')
-        ax.set_xlabel('Score')
-        ax.set_ylabel('Likelihood of Score')
+        ax.set_title('Cumulative Histogram of Node In-Edges')
+        ax.set_xlabel('#In-Edges')
+        ax.set_ylabel('Fraction of Nodes')
 
         plt.show()
        
+       
+    def plot_child_distribution(self, plot=True):
+                
+        
+        scores = defaultdict(list)
+        
+        for x in self.get_nodes():
+            num_Children = len(self.kg.in_edges(x))
+            
+            nodetype = self.node_types(x, single=True)
+            scores[nodetype].append(num_Children)
+        
+        fig, ax = plt.subplots(figsize=(8, 4))
+        
+        # plot the cumulative histogram
+        for nt in scores:
+            n, bins, patches = ax.hist(scores[nt], len(scores[nt]), density=True, histtype='step',
+                                cumulative=True, label='{}'.format(nt))
+
+        # tidy up the figure
+        ax.grid(True)
+        ax.legend(loc='right')
+        ax.set_title('Cumulative Histogram of Node In-Edges')
+        ax.set_xlabel('#In-Edges')
+        ax.set_ylabel('Fraction of Nodes')
+
+        if plot:
+            plt.show()
+       
     #
-    def plot_edge_types(self):
+    def plot_edge_types(self, field="type", show_threshold=0.02):
         
-        ntCounter = self.get_edge_types()
-        
+        ntCounter = self.get_edge_types(field=field)
         counteritems = [("{}\nn={}".format(x, ntCounter[x]), ntCounter[x]) for x in ntCounter]
-        counteritems = sorted(counteritems, key=lambda x: x[1])
                    
-        self._plot_pie(counteritems)
+        self._plot_pie(counteritems, show_threshold=show_threshold)
         
-    def plot_edge_sources(self):
-        
-        ntCounter = self.get_edge_types(field="source")
-        
-        counteritems = [("{}\nn={}".format(x, ntCounter[x]), ntCounter[x]) for x in ntCounter]
-        counteritems = sorted(counteritems, key=lambda x: x[1])
-                   
-        self._plot_pie(counteritems)
        
     def plot_edge_between_types(self, show_threshold=0.02):
         
         ntCounter = self.get_edge_between_type()
-        
         counteritems = [("{} →\n{}, n={}".format(x[0], x[1], ntCounter[x]), ntCounter[x]) for x in ntCounter]
-        counteritems = sorted(counteritems, key=lambda x: x[1])
+     
+        self._plot_pie(counteritems, show_threshold=show_threshold)
         
+            
+    def _plot_pie(self, counteritems, show_threshold=0.02):
+        
+        counteritems = sorted(counteritems, key=lambda x: x[1])
+                
         totalcount = sum([x[1] for x in counteritems])
         
         filtereditems = []
         other_count = 0
         for x in counteritems:
             
-            if (x[1]/totalcount) < show_threshold:
+            if (not show_threshold is None) and ((x[1]/totalcount) < show_threshold):
                 other_count += x[1]
             else:
                 filtereditems.append(x)
                 
         if other_count > 0:
-            filtereditems.append(("Other, n={}".format(other_count), other_count))                
-                   
-        self._plot_pie(filtereditems)
-        
-            
-    def _plot_pie(self, counteritems):
-        
-        counteritems = sorted(counteritems, key=lambda x: x[1])
+            filtereditems.append(("Other, n={}".format(other_count), other_count))     
 
         finallist = []
-        for i in range(0, len(counteritems)):
+        for i in range(0, len(filtereditems)):
             if i % 2 == 0:
-                finallist.append( counteritems.pop() )
+                finallist.append( filtereditems.pop() )
             else:
-                finallist.append(counteritems.pop(0))
+                finallist.append(filtereditems.pop(0))
         
         data = []
         labels = []        
@@ -614,6 +646,20 @@ class KGraph:
             types = set([types])
             
         return len(set(types).intersection(self.kg.nodes[node]["type"])) > 0
+          
+    def get_node_scores(self, score_accessor=lambda x: x.get("score", 0), nodes=None):
+        
+        all_scores = []
+        for node in self.kg.nodes:
+            
+            if not nodes is None:
+                if not node in nodes:
+                    continue
+            
+            score = score_accessor(self.kg.nodes[node])
+            all_scores.append(score)
+            
+        return all_scores          
                 
     def get_edge_scores(self, score_accessor=lambda x: x.get("score", 0), edge_types=None, nodes=None):
         
@@ -777,7 +823,7 @@ class KGraph:
         ax.set_xlabel('Score')
         ax.set_ylabel('Likelihood of Score')
         
-    def plot_score_violin(self, per_edge_type=False, single_edge_types=False, edge_types=None, score_accessor=lambda x: x.get("score", 0)):
+    def plot_score_violin(self, per_edge_type=False, single_edge_types=False, edge_types=None, score_accessor=lambda x: x.get("score", 0), figsize=None):
         
         scores = dict()
         if per_edge_type:
@@ -796,8 +842,15 @@ class KGraph:
                        
         keys, values = map(chain.from_iterable, zip(*(([k]*len(v), v) for k, v in scores.items())))
         scoresDF = pd.DataFrame({'class': list(keys), 'value': list(values)})
+        
+        numClasses = len(set(scoresDF["class"]))
+        width=numClasses*0.75
+        
+        if figsize is None:
+            figsize=(width, 6)
                         
-        chart = sns.violinplot(data=scoresDF, x="class", y="value")
+        fig, ax = plt.subplots(figsize=figsize)
+        chart = sns.violinplot(data=scoresDF, x="class", y="value", ax=ax)
         chart.set_xticklabels(chart.get_xticklabels(), rotation=45, horizontalalignment='right')
 
         plt.show()
@@ -1153,19 +1206,24 @@ class KGraph:
         return self.kg.subgraph(genes).copy() # copy avoids edge view problematics ...
 
     def plot_graph(self, ax=None, figsize=(6,6), title="", pos=None, close=True, font_size=8,
-                   edge_score_normalizer=None,
-                   node_score_normalizer=None,
-                   edge_cmap = plt.cm.Reds,
-                   max_node_size = 200,
-                   nodetype2color={"gene": "#239756", "geneset": "#3fc37e", "disease": "#5047ee", "drug": "#3026c1", "NA": "#f37855" },
-                   nodecolors = {"gene": "#239756", "geneset": "#3fc37e", "disease": "#5047ee", "drug": "#e600e6", "NA": "#f37855" },
-                   nodeshapes = {"gene": "o", "geneset": "s", "disease": "^", "drug": "p", "NA": "o" },
-                   edge_score_accessor=lambda x: x.get("score", 0),
-                   node_score_accessor=lambda x: x.get("score", 0)
-                   ):   
+                edge_score_normalizer=None,
+                node_score_normalizer=None,
+                edge_cmap = plt.cm.Reds,
+                max_node_size = 200,
+                nodetype2color={"gene": "#239756", "geneset": "#3fc37e", "disease": "#5047ee", "drug": "#3026c1", "NA": "#f37855" },
+                nodecolors = {"gene": "#239756", "geneset": "#3fc37e", "disease": "#5047ee", "drug": "#e600e6", "NA": "#f37855" },
+                nodeshapes = {"gene": "o", "geneset": "s", "disease": "^", "drug": "p", "NA": "o" },
+                edge_score_accessor=lambda x: x.get("score", 0),
+                node_score_accessor=lambda x: x.get("score", 0)
+                ):   
                 
         if ax is None:
-            fig, ax = plt.subplots(1,1, figsize=figsize)
+            fig = plt.figure(tight_layout=True, figsize=figsize)
+            gs = gridspec.GridSpec(2, 2, height_ratios=[2, 0.1])
+
+            ax = fig.add_subplot(gs[0, :])
+            es_ax = fig.add_subplot(gs[1, 0])
+            ns_ax = fig.add_subplot(gs[1, 1])
             
         G = self.kg
 
@@ -1241,8 +1299,8 @@ class KGraph:
             else:
                 nodelabels[x] = x
             
-          
-                           
+        
+                        
         nx.draw_networkx_labels(G, posnodes, labels=nodelabels, font_size=font_size, ax=ax)
         
         edge_scores = [edge_score_accessor(G.edges[e]) for e in G.edges]
@@ -1273,14 +1331,9 @@ class KGraph:
                 edge_score_normalizer = plt.Normalize(vmin = edge_min, vmax=edge_max)
                 
             sm = plt.cm.ScalarMappable(cmap=edge_cmap, norm=edge_score_normalizer)
-            cbar = plt.gcf().colorbar(sm, orientation="horizontal", pad=0.1, ax=ax, shrink=1.0)
+            cbar = plt.gcf().colorbar(sm, orientation="horizontal", pad=0.1, ax=ax, cax=es_ax, shrink=1.0)
             cbar.ax.set_xlabel("Edge Score".format())
-            
-            l = matplotlib.ticker.MaxNLocator(nbins=5)
-            l.create_dummy_axis()
-            newticks = l.tick_values(edge_min, edge_max)
-            cbar.ax.set_xticks(newticks)
-            
+                        
             
             def get_legend(norm, ax, num=5):
                 
@@ -1293,7 +1346,7 @@ class KGraph:
                 sc = ax.scatter(xsizes, ysizes, s=plotsizes, color='#239756')
                 
                 for i, (xi, yi) in enumerate(zip(xsizes, ysizes)):
-                    plt.text(xi, yi-0.05, "{:.3f}".format(sizes[i]), va='bottom', ha='center', fontsize="small")
+                    plt.text(xi, -0.07, "{:.3f}".format(sizes[i]), va='bottom', ha='center', fontsize="small")
 
                 ax.get_xaxis().set_visible(False)
                 ax.get_yaxis().set_visible(False)
@@ -1301,11 +1354,15 @@ class KGraph:
                 ax.spines['right'].set_visible(False)
                 ax.spines['bottom'].set_visible(False)
                 ax.spines['left'].set_visible(False)
+                
+                mid = min(xsizes) + (max(xsizes)-min(xsizes))/2
+                plt.text(mid, -0.1, "Node Score", va='bottom', ha='center', fontsize="small")
+                
             
             from mpl_toolkits.axes_grid1 import make_axes_locatable
-            divider = make_axes_locatable(cbar.ax)
-            sax = divider.append_axes('right', size='100%', pad=0.2)
-            get_legend(node_score_normalizer, sax)
+            #divider = make_axes_locatable(cbar.ax)
+            #sax = divider.append_axes("right", size='100%')
+            get_legend(node_score_normalizer, ns_ax)
 
             plt.show()
             plt.close()
@@ -1586,7 +1643,8 @@ class NetworkExtender:
         
         orig_kg = fullKG.kg
         
-        
+        if isinstance(nodes, KGraph):
+            nodes = list(nodes.kg.nodes)
         
         relNodes = set()
         for en in nodes:
@@ -1672,15 +1730,17 @@ class NetworkExtender:
             
             relNodes.update(acceptNodes)
             
-        print("Input Graph Nodes", len(nodes))
-        print("Extended Graph Nodes", len(relNodes))
+        if verbose:
+            print("Input Graph Nodes", len(nodes))
+            print("Extended Graph Nodes", len(relNodes))
         
         enodes = set(list(relNodes) + list(nodes))
                 
         okg = KGraph(fullKG.random_state, kgraph_name="nwe_sub")
         okg.kg = nx.subgraph(fullKG.kg, enodes).copy()
         
-        print("Extended Graph Edges", len(okg.kg.edges))
+        if verbose:
+            print("Extended Graph Edges", len(okg.kg.edges))
         
         if not scorer is None:
             scorer.score(okg)
@@ -1818,7 +1878,7 @@ class CommunityTool:
         plt.legend()
     
     
-    def visualize_communities(self, details, title, subsetOrderFunc=None, field="median"):
+    def visualize_communities(self, details, title, subsetOrderFunc=None, field="median", show_values=True):
         
         
         allSubsets = set()
@@ -1836,7 +1896,7 @@ class CommunityTool:
 
             scores = []
             for subset in allSubsets:
-                score = details[mod].get(subset, {}).get("{}_other".format(field), 0)
+                score = details[mod].get(subset, {}).get("{}".format(field), 0)
                 scores.append(score)
 
             modScores.append( tuple(scores) ) #medians
@@ -1846,7 +1906,7 @@ class CommunityTool:
         modDF.columns = modNames
         modDF.index = ["{} ({})".format(x, field) for x in allSubsets] #["{}_mean".format(x) for x in allSubsets]
 
-        g = sns.clustermap(modDF, figsize=(12, 4), row_cluster=False, xticklabels=True, yticklabels=True)    
+        g = sns.clustermap(modDF, figsize=((2+0.7*len(details)), 4), row_cluster=False, xticklabels=True, yticklabels=True, annot=show_values)    
         g.ax_heatmap.set_title("{} modules".format(title))
             
          
@@ -1873,7 +1933,7 @@ class CommunityTool:
        
     def plot_community(self, KGs, communityNodes, own, main_net=None, num_columns=4,
                          title=None, nodecolors = {"gene": "#239756", "geneset": "#3fc37e", "disease": "#5047ee", "drug": "#3026c1", "NA": "#f37855" },
-                         outfile=None, dpi=500,
+                         outfile=None, dpi=500, show=True,
                          edge_score_accessor=lambda x: x.get("score", 0),
                          node_score_accessor=lambda x: x.get("score", 0),
                          verbose=False):
@@ -2053,8 +2113,9 @@ class CommunityTool:
                               pkg.edges[edge].get("score", 0), pkg.edges[edge].get("type", 0),
                               pkg.nodes[edge[0]], pkg.nodes[edge[1]], pkg.edges[edge],
                               sep="\t", file=fout)
-                                        
-        plt.show()
+                   
+        if show:                     
+            plt.show()
         plt.close()
         
     def compare_modules(self, comms, figsize=(16, 12)):
@@ -2092,12 +2153,11 @@ class CommunityTool:
         ax.set_yticklabels(["", ""] + modules + [""], rotation=0, ha='right')
 
         #print(ax.get_xticklabels())
-        
-        plt.show()
+        #plt.show()
         
         
     
-class DifferentialModuleIdentifier:
+class DifferentialCommunityIdentifier:
     
     def __init__(self) -> None:
         pass
@@ -2121,7 +2181,54 @@ class DifferentialModuleIdentifier:
         return (u1 - u2) / s
             
     
-    def identify_differential_communities(self, communities, ref_kg, KGs, sort_function=None, score_field="score", min_nodes=10, min_enriched=0.5, min_effect_size=0.2, all_verbose=False, verbose=False):
+    def calculate_scores(self, allKGs, ref_kg, nodes, score_field):
+                
+        otherKGs = {x: allKGs[x] for x in allKGs if not x in ref_kg}
+        refKGs = {x: allKGs[x] for x in allKGs if x in ref_kg}
+        
+        otherScoresDict = self.score_subgraphs_for_subnet(otherKGs, nodes, score_field=score_field)           
+        refScoresDict = self.score_subgraphs_for_subnet(refKGs, nodes, score_field=score_field)
+        
+        # list of edge scores!
+        refScores = []
+        for x in refScoresDict:
+            refScores += refScoresDict[x]
+        
+        otherScores = []
+        for x in otherScoresDict:
+            otherScores += otherScoresDict[x]
+        
+        diffScores = defaultdict(dict)
+        
+        def create_diffscores(main_set, background_set):
+            diffScore = {}
+            diffScore["median"] = np.median(main_set)
+            diffScore["mean"] = np.mean(main_set)
+            
+            diffScore["median_bg"] = np.median(background_set)
+            
+            diffScore["cohend"] = self.cohend(main_set, background_set)
+            #diffScores[x]["subset_scores"] = otherScoresDict[x]
+            #diffScores[x]["base_scores"] = ownScores
+            
+            ks_res = scipy.stats.ks_2samp(main_set, background_set, alternative="two-sided")
+            diffScore["ks_res"] = ks_res
+            diffScore["ks"] = ks_res.statistic
+            return diffScore
+        
+        
+        # for other communities
+        for x in otherScoresDict:
+            diffScores[x] = create_diffscores(otherScoresDict[x], refScores)          
+            
+        # for ref communities
+        for x in refScoresDict:           
+            diffScores[x] = create_diffscores(refScoresDict[x], otherScores)       
+
+        return diffScores
+    
+    
+    def identify_differential_communities(self, communities, ref_kg, KGs, sort_function=None, score_field="score", use_statistic="cohend", min_nodes=10, min_enriched=0.5, min_effect_size=0.2, all_verbose=False, verbose=False):
         
         
         if sort_function is None:
@@ -2144,44 +2251,21 @@ class DifferentialModuleIdentifier:
                 continue
             
             
-            otherKGs = {x: KGs[x] for x in KGs if not x in ref_kg}
-            refKGs = {x: KGs[x] for x in KGs if x in ref_kg}
-            
-            commScores = self.score_subgraphs_for_subnet(otherKGs, communities[cID], score_field=score_field)           
-            ownScoresDict = self.score_subgraphs_for_subnet(refKGs, communities[cID], score_field=score_field)
-            
-            # list of edge scores!
-            ownScores = []
-            for x in ownScoresDict:
-                ownScores += ownScoresDict[x]
-            
-            diffScores = defaultdict(dict)
-            for x in commScores:
-                diffScores[x] = {}
-                diffScores[x]["median_other"] = np.median(commScores[x])
-                diffScores[x]["mean_other"] = np.mean(commScores[x])
-                
-                diffScores[x]["median_own"] = np.median(ownScores)
-                
-                diffScores[x]["cohend"] = self.cohend(commScores[x], ownScores)
-                diffScores[x]["subset_scores"] = commScores[x]
-                diffScores[x]["base_scores"] = ownScores
-                                
-                #if np.median(commScores[x]) == 0:
-                #    logFC = 0
-                #else:
-                #    logFC = np.log2(np.median(commScores[x]) / np.median(ownScores))                               
-                #diffScores[x]["logFC"] = logFC
-                
-                diffScores[x]["ks"] = scipy.stats.ks_2samp(commScores[x], ownScores)
+            diffScores = self.calculate_scores(KGs, ref_kg, communities[cID], score_field)
                                                               
             enrichedModule = 0
             for x in diffScores:
-                if abs(diffScores[x]["cohend"]) >= min_effect_size:
+                if x in ref_kg:
+                    continue
+                    
+                if abs(diffScores[x][ use_statistic ]) >= min_effect_size:
                     enrichedModule+=1
-
+            
+            numRefKGs = len(ref_kg)
+            numNonRefKGs = len([x for x in diffScores if not x in ref_kg])
+            
             accepted=False
-            if (enrichedModule / len(diffScores)) >= min_enriched:
+            if (enrichedModule / numNonRefKGs) >= min_enriched:
                 accepted=True                    
                 relcomms.append(cID)
                 reldetails[cID] = diffScores
@@ -2189,12 +2273,7 @@ class DifferentialModuleIdentifier:
             
             if all_verbose or verbose:
                 if all_verbose or accepted:
-                    print("community", cID, len(communities[cID]), accepted)
-                    
-                    # add reference info for accepted
-                    for refName in refKGs:
-                        diffScores[refName]["median_other"] = np.median(ownScoresDict[refName])
-                        diffScores[refName]["mean_other"] = np.mean(ownScoresDict[refName])
+                    print("community", cID, len(communities[cID]), accepted, enrichedModule, "/", numNonRefKGs)
                     
                     for x in diffScores:
                         print(x, diffScores[x])
@@ -2827,11 +2906,11 @@ class ModuleCompare:
             progressbar.Bar(), ' ', progressbar.Percentage(), ' ', progressbar.AdaptiveETA()
             ])
 
-    def draw_network(self, G, title=None):
+    def draw_network(self, G, title=None, borderWeightQuantile=0.8):
         
         allEdgeWeights = [d["weight"] for (u, v, d) in G.edges(data=True) if d["weight"] > 0]
         #print(np.quantile(allEdgeWeights, [0, 0.25, 0.5, 0.75, 0.8, 1]))
-        borderWeight = np.quantile(allEdgeWeights, 0.8)
+        borderWeight = np.quantile(allEdgeWeights, borderWeightQuantile)
         
         elarge = [(u, v) for (u, v, d) in G.edges(data=True) if d["weight"] >= borderWeight]
         esmall = [(u, v) for (u, v, d) in G.edges(data=True) if 0 < d["weight"] < borderWeight]
@@ -2886,8 +2965,16 @@ class ModuleCompare:
         plt.show()
 
     
+    def module_similarities_to_df(self, modSims):
+        
+        df = pd.DataFrame.from_records([(x[0], x[1], modSims[x]) for x in modSims])
+        df.columns = ["Module1", "Module2", "Similarity"]
+        df = df.sort_values("Similarity", ascending=False)
+        
+        return df
+    
 
-    def network_compare_modules(self, inKGs, measure="jaccard"):
+    def network_compare_modules(self, inKGs, measure="jaccard", borderWeightQuantile=0.8):
         
         assert (measure in ["jaccard", "sorensen"])
 
@@ -2926,10 +3013,10 @@ class ModuleCompare:
                 modSims[(inMod, oMod)] = similarity
                 similarityNetwork.add_edge(inMod, oMod, weight=similarity)                
 
-        self.draw_network(similarityNetwork, title="Module Overlaps")
+        self.draw_network(similarityNetwork, title="Module Overlaps", borderWeightQuantile=borderWeightQuantile)
         return modSims
 
-    def network_compare_lca(self, inKGs, max_terms=None, fullKG=None, ns=None):
+    def network_compare_lca(self, inKGs, max_terms=None, fullKG=None, ns=None, borderWeightQuantile=0.8):
         
         assert(not (fullKG is None and ns is None))
 
@@ -2954,11 +3041,11 @@ class ModuleCompare:
         for edge in modComps:
             G.add_edge( edge[0], edge[1], weight=modComps[edge])
         
-        self.draw_network(G)
+        self.draw_network(G, borderWeightQuantile=borderWeightQuantile)
         
         return modComps
     
-    def network_compare_netsim(self, inKGs, max_terms=None, fullKG=None, ns=None):
+    def network_compare_netsim(self, inKGs, borderWeightQuantile=0.8, max_terms=None, fullKG=None, ns=None):
 
         assert(not (fullKG is None and ns is None))
 
@@ -2971,9 +3058,7 @@ class ModuleCompare:
         modComps = {}
         bar = self.makeProgressBar()
         allComparisons = [(i,j) for i in range(0, len(modNames)) for j in range(i+1, len(modNames))]
-        for i,j in bar(allComparisons):
-            #print(datetime.fromtimestamp(time.time()))
-        
+        for i,j in bar(allComparisons):      
             
             signame1 = modNames[i]
             signame2 = modNames[j]
@@ -2981,19 +3066,18 @@ class ModuleCompare:
             sig1 = inKGs[signame1]
             sig2 = inKGs[signame2]
             modComps[(signame1, signame2)] = ns.compare_modules(sig1, sig2, max_terms=max_terms, verbose=False)
-        
-                #print(datetime.fromtimestamp(time.time()))
+
         
         G = nx.Graph()
         for edge in modComps:
             G.add_edge( edge[0], edge[1], weight=modComps[edge])
         
-        self.draw_network(G)
+        self.draw_network(G, borderWeightQuantile=borderWeightQuantile)
         
         return modComps
     
 
-    def module_umap(self, sigKG, kg:KGraph):
+    def module_pca(self, sigKG, kg:KGraph):
 
         nodeList = [x for x in kg.kg.nodes]
         cluster_names = [x for x in sigKG]
@@ -3061,7 +3145,7 @@ class ModuleCompare:
         #umap.plot.points(embedding, labels=np.array(cluster_labels), background='black')
         #umap.plot.connectivity(embedding, show_points=True, edge_bundling='hammer')
 
-    def plot_dendrogram(self, simDict):
+    def plot_dendrogram(self, simDict, figsize=(8,6), color_threshold=1):
         allModules = natsorted(set([x[0] for x in simDict]+[x[1] for x in simDict]))
         simMatrix = np.zeros( (len(allModules), len(allModules)) )
 
@@ -3069,13 +3153,13 @@ class ModuleCompare:
             simMatrix[ allModules.index(mod1), allModules.index(mod2) ] = simDict[(mod1, mod2)]
             simMatrix[ allModules.index(mod2), allModules.index(mod1) ] = simDict[(mod1, mod2)]
 
-            
+        fig, ax = plt.subplots(1, 1, figsize=figsize)
 
         simVec = scipy.spatial.distance.squareform(simMatrix)
         linkage =  scipy.cluster.hierarchy.linkage(1 - simVec)
-        dendro  =  scipy.cluster.hierarchy.dendrogram(linkage, labels=allModules)
+        dendro  =  scipy.cluster.hierarchy.dendrogram(linkage, labels=allModules, ax=ax, color_threshold=color_threshold)
         
-        plt.gca().set_xticklabels(plt.gca().get_xticklabels(), rotation = 45, ha="right")
+        ax.set_xticklabels(ax.get_xticklabels(), rotation = 45, ha="right")
         plt.show()
 
 class CRankExplorer:
@@ -3156,12 +3240,12 @@ class CRankExplorer:
         }
 
 
-    def evaluate_communities(self, sigKGs, fullKGs):
+    def evaluate_communities(self, sigKGs, fullKGs, mod_sep="_mod_"):
 
         commScores = []
         for comm in sigKGs:
         
-            mainGraph = comm.split("_mod_")[0]
+            mainGraph = comm.split(mod_sep)[0]
             #print(comm, mainGraph)
 
             mainKG = fullKGs.get(mainGraph, None)
