@@ -7,6 +7,10 @@ mi_diff_cardiomyocyte
 
 hmi/*
 kpmp/*
+llm_addon/*
+myocardial/*
+simulated_data/*
+scripts/*
 
 *.tar.gz
 *.tsv

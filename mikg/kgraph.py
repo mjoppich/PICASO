@@ -35,6 +35,8 @@ import progressbar
 
 # from https://stackoverflow.com/questions/25500541/matplotlib-bwr-colormap-always-centered-on-zero
 import matplotlib
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+
 
 class MidpointNormalize(matplotlib.colors.Normalize):
     def __init__(self, vmin=None, vmax=None, midpoint=None, clip=False):
@@ -1224,6 +1226,12 @@ class KGraph:
             ax = fig.add_subplot(gs[0, :])
             es_ax = fig.add_subplot(gs[1, 0])
             ns_ax = fig.add_subplot(gs[1, 1])
+        else:
+            divider = make_axes_locatable(ax)
+            es_ax = divider.append_axes("bottom", size="5%", pad=0.5)
+            ns_ax = divider.append_axes("bottom", size="10%", pad=0.5)
+
+            
             
         G = self.kg
 
@@ -1325,45 +1333,46 @@ class KGraph:
         nx.draw_networkx_edges(G, pos, width=2, edge_vmin=edge_min, edge_vmax=edge_max, edge_cmap = edge_cmap, edge_color=edge_scores, ax=ax)
         ax.set_title(title, loc='left')
         
+        
+        if edge_score_normalizer is None:
+            edge_score_normalizer = plt.Normalize(vmin = edge_min, vmax=edge_max)
+            
+        sm = plt.cm.ScalarMappable(cmap=edge_cmap, norm=edge_score_normalizer)
+        cbar = plt.gcf().colorbar(sm, orientation="horizontal", pad=0.1, ax=ax, cax=es_ax, shrink=1.0)
+        cbar.ax.set_xlabel("Edge Score".format())
+                    
+        
+        def get_legend(norm, ax, num=5):
+            
+            sizes = np.linspace(norm.vmin, norm.vmax, num)
+            
+            plotsizes = [node_size_func(x) for x in sizes]
+
+            xsizes = [i for i in range(0, len(sizes))]
+            ysizes = [0]*len(sizes)
+            sc = ax.scatter(xsizes, ysizes, s=plotsizes, color='#239756')
+            
+            for i, (xi, yi) in enumerate(zip(xsizes, ysizes)):
+                plt.text(xi, -0.07, "{:.3f}".format(sizes[i]), va='bottom', ha='center', fontsize="small")
+
+            ax.get_xaxis().set_visible(False)
+            ax.get_yaxis().set_visible(False)
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            ax.spines['bottom'].set_visible(False)
+            ax.spines['left'].set_visible(False)
+            
+            mid = min(xsizes) + (max(xsizes)-min(xsizes))/2
+            plt.text(mid, -0.1, "Node Score", va='bottom', ha='center', fontsize="small")
+            
+        
+        #divider = make_axes_locatable(cbar.ax)
+        #sax = divider.append_axes("right", size='100%')
+        get_legend(node_score_normalizer, ns_ax)
+        
+        
         if close:
-            
-            if edge_score_normalizer is None:
-                edge_score_normalizer = plt.Normalize(vmin = edge_min, vmax=edge_max)
-                
-            sm = plt.cm.ScalarMappable(cmap=edge_cmap, norm=edge_score_normalizer)
-            cbar = plt.gcf().colorbar(sm, orientation="horizontal", pad=0.1, ax=ax, cax=es_ax, shrink=1.0)
-            cbar.ax.set_xlabel("Edge Score".format())
-                        
-            
-            def get_legend(norm, ax, num=5):
-                
-                sizes = np.linspace(norm.vmin, norm.vmax, num)
-                
-                plotsizes = [node_size_func(x) for x in sizes]
-
-                xsizes = [i for i in range(0, len(sizes))]
-                ysizes = [0]*len(sizes)
-                sc = ax.scatter(xsizes, ysizes, s=plotsizes, color='#239756')
-                
-                for i, (xi, yi) in enumerate(zip(xsizes, ysizes)):
-                    plt.text(xi, -0.07, "{:.3f}".format(sizes[i]), va='bottom', ha='center', fontsize="small")
-
-                ax.get_xaxis().set_visible(False)
-                ax.get_yaxis().set_visible(False)
-                ax.spines['top'].set_visible(False)
-                ax.spines['right'].set_visible(False)
-                ax.spines['bottom'].set_visible(False)
-                ax.spines['left'].set_visible(False)
-                
-                mid = min(xsizes) + (max(xsizes)-min(xsizes))/2
-                plt.text(mid, -0.1, "Node Score", va='bottom', ha='center', fontsize="small")
-                
-            
-            from mpl_toolkits.axes_grid1 import make_axes_locatable
-            #divider = make_axes_locatable(cbar.ax)
-            #sax = divider.append_axes("right", size='100%')
-            get_legend(node_score_normalizer, ns_ax)
-
+        
             plt.show()
             plt.close()
             
@@ -1669,7 +1678,7 @@ class NetworkExtender:
                     for x in geneNeighborsS:
                         acceptX = False
                         for nodeType in nodeTypes:
-                            acceptX = acceptX or (orig_kg.edges[(n, x)].get("{}_spec".format(nodeType), 1.0) > minGeneSpec.get(nodeType, 0))
+                            acceptX = acceptX or (orig_kg.edges[(n, x)].get("{}_spec".format(nodeType), 1.0) > minGeneSpec)
                             if acceptX:
                                 break
                         if acceptX:
@@ -1679,7 +1688,7 @@ class NetworkExtender:
                     for x in geneNeighborsP:
                         acceptX = False
                         for nodeType in nodeTypes:
-                            acceptX = acceptX or (orig_kg.edges[(x,n)].get("{}_spec".format(nodeType), 1.0) > minGeneSpec.get(nodeType, 0))
+                            acceptX = acceptX or (orig_kg.edges[(x,n)].get("{}_spec".format(nodeType), 1.0) > minGeneSpec)
                             if acceptX:
                                 break
                         if acceptX:
@@ -2154,6 +2163,12 @@ class CommunityTool:
 
         #print(ax.get_xticklabels())
         #plt.show()
+        
+        
+        
+    
+        
+        
         
         
     
@@ -3307,4 +3322,581 @@ class CRankExplorer:
         plt.show()
         plt.close()
 
+class DefaultDict(dict):
+        
+    def __missing__(self, key):
+        self[key] = dict()
+        return self[key]
 
+class TwoLevelDifferentialAnalysis:
+
+    def __init__( self, tlDict, sorted_zones, output_folder_formatter, fullKG=None):
+
+        self.tldict = tlDict
+        self.sorted_zones = sorted_zones
+
+        self.name_sep="_mod_"
+        
+        self.cellgroupdata = DefaultDict()
+        
+        if fullKG is None:
+            for x in self.tldict:
+                for y in self.tldict[x]:
+                    self.kg = self.tldict[x][y]
+        else:
+            self.kg = fullKG
+
+        self.output_folder_formatter = output_folder_formatter
+
+        self.recalc_warning=False
+
+
+    def calculate_modules(self, relevant_cellgroups=None, cg_zone_formatter="{}_{}", reference_formatter="{}_Ref", diffkg = DifferentialKG(), overwrite=False ):
+
+        if not overwrite and len(self.cellgroupdata) > 0 and self.recalc_warning is False:
+            print("WARNING! This call will overwrite existing results! Call this function again to perform action.")
+            self.recalc_warning=True
+            return
+
+        self.recalc_warning=False       
+        self.cellgroupdata.clear()
+    
+        for cellgroup in self.tldict:
+
+            if not relevant_cellgroups is None:
+                if not cellgroup in relevant_cellgroups:
+                    continue
+            print(cellgroup)
+
+            dkgs = diffkg.calculate_diffkg_list( self.tldict[cellgroup], reference_formatter.format(cellgroup), [x for x in self.tldict[cellgroup]])
+            
+            
+            sorted_dkgs = {}
+            for x in self.sorted_zones:
+                cg_zone_name = cg_zone_formatter.format(cellgroup, x)
+                if cg_zone_name in dkgs:
+                    sorted_dkgs[cg_zone_name] = dkgs[cg_zone_name]
+                    
+            print(sorted_dkgs)
+            
+            cg1Data = self._get_diff_comms( sorted_dkgs, minEdgeScore=0.5, min_effect_size=0.8, resolution=12 )
+
+            self.cellgroupdata[cellgroup]["kg"] = sorted_dkgs
+            for stats in cg1Data:
+                self.cellgroupdata[cellgroup][stats] = cg1Data[stats]
+
+
+    def _get_diff_comms(self, tkgs,
+                        min_effect_size=1.0,
+                        resolution=4,
+                        minEdgeScore=1,
+                        min_node_scores={"drug": 1.0, "ncRNA": 0.7},
+                        network_extend_spec = {"geneset": {"min_gene_spec": 0.5,
+                                                           "max_size_gs": 200,
+                                                           "min_fraction_large": 0.6,
+                                                           "min_fraction_small": 0.5},
+                                               "disease": {"min_gene_spec": 0.8,
+                                                           "max_size_gs": 100,
+                                                           "min_fraction_large": 0.7,
+                                                           "min_fraction_small": 0.6}}):
+
+        all_comms = {}
+        all_details = {}
+        all_sigs = {}
+        
+        dmi = DifferentialCommunityIdentifier()
+        nwe = NetworkExtender()
+        
+        for zone in tkgs:
+            print("Analysing", zone)
+            gene_kg = tkgs[zone].to_gene_kgraph()
+            
+            zone_comms = gene_kg.get_communities(minEdgeScore=minEdgeScore, resolution=resolution, prefix=zone, sep=self.name_sep, score_field="fc_score")
+    
+            print("Identified communities")
+            gene_kg.describe_communities(zone_comms)
+            
+            sigcomm, sigdetails = dmi.identify_differential_communities(zone_comms, zone, tkgs, all_verbose=False, verbose=False,
+                                                               min_enriched=0.80, min_effect_size=min_effect_size, score_field="fc_score")   
+               
+            print("Significant communities")
+            sig_zone_comms = {x: zone_comms[x] for x in sigcomm}
+            gene_kg.describe_communities(sig_zone_comms)
+
+            taken_comms = 0
+        
+            for comm in sigcomm:
+                print(comm, len(zone_comms[comm]))
+        
+                if len(zone_comms[comm]) > 100:
+                    #print("Skipping", comm, "due to size.")
+                    continue
+                
+                #tkgid = "_".join(comm.split("_", 2)[:2])
+                #tkgid = comm.split(self.name_sep)[0]
+                #print(tkgid, zone==tkgid)
+                
+                # adds "geneset", "disease", "ncRNA"
+
+
+
+                eKG = zone_comms[comm]
+                for nodetype in network_extend_spec:
+                    eKG = nwe.extend_network(eKG, tkgs[zone],
+                                             node_types = [nodetype],
+                                             minFraction_large=network_extend_spec[nodetype].get("min_fraction_large", 0.7),
+                                             minFraction_small=network_extend_spec[nodetype].get("min_fraction_small", 0.5), 
+                                             minGeneSpec={nodetype: network_extend_spec[nodetype].get("min_gene_spec", 0.5)},
+                                             min_children_gs=network_extend_spec[nodetype].get("min_children_gs", 3),
+                                             max_size_gs=network_extend_spec[nodetype].get("max_size_gs", 200),
+                                             score_field="fc_score",
+                                             verbose=False)
+
+                    
+
+                
+                if len(eKG.kg.nodes) == len(zone_comms[comm]):
+                    #print("Skipping due to no extended nodes.")
+                    continue
+                                    
+                for nodetype in min_node_scores:
+                    # adds nodetype
+                    nwe.extend_nodetypes(eKG, tkgs[zone], nodetype,
+                                             min_node_score=min_node_scores[nodetype],
+                                             node_score_accessor=lambda d: d.get("{}_spec".format(nodetype), 0), # only disease-specific drugs
+                                             edge_score_accessor=lambda d: d.get("fc_score", 0), # no withdrawn drugs,
+                                             verbose=False
+                                             )
+
+                #print(eKG)
+
+                taken_comms = taken_comms + 1
+
+                all_sigs[comm] = eKG
+                all_comms[comm] = zone_comms[comm]
+                all_details[comm] = sigdetails[comm]
+
+            print("Number of saved communities:", taken_comms)
+
+
+        return {"communities": all_comms, "communities_details": all_details, "communities_enhanced": all_sigs}
+        
+
+    def plot_module_comparisons(self, plot_communities=False, ct = CommunityTool()):
+        
+        for cellgroup in self.cellgroupdata:
+            cgKGs = self.cellgroupdata[cellgroup]["kg"]
+            cgComms = self.cellgroupdata[cellgroup]["communities"]
+            cgDetails = self.cellgroupdata[cellgroup]["communities_details"]
+            cgSigKG = self.cellgroupdata[cellgroup]["communities_enhanced"]
+            
+        
+            outdir = self.output_folder_formatter.format(cellgroup)
+            
+            if not os.path.isdir(outdir):
+                os.makedirs(outdir, exist_ok=True)
+            
+            outname = outdir+"/all_module_heatmap.png"
+            
+            ct.visualize_communities(cgDetails, "Diff {}".format(cellgroup),
+                                     subsetOrderFunc=self.zone_sorter,
+                                     field="mean")
+            print(outname)
+            plt.savefig(outname)
+            plt.close()
+        
+            outname = outdir+"/all_module_compare.png"
+            fwidth = 0.15 * len(cgComms)
+            print(fwidth)
+        
+            ct.compare_modules(cgComms, figsize=(fwidth, fwidth))
+            print(outname)
+            plt.savefig(outname)
+            plt.close()
+
+
+            subgroup_scores = dict()
+            for sg in cgKGs:
+                subgroup_scores[sg] = cgKGs[sg].get_edge_scores(score_accessor=lambda x: x.get("fc_score", 0))
+
+            outname = outdir+"/score_distribution.png"
+
+            df = pd.DataFrame.from_dict(subgroup_scores)
+            sns.violinplot(data=df)
+            plt.title(cellgroup)
+            plt.show()
+            plt.close()
+            
+            if plot_communities:
+                
+                for comm in cgSigKG:
+                    eKG = cgSigKG[comm]
+                    zone = comm.split(self.name_sep)[0]
+                    
+                    ct.plot_community(cgKGs, eKG.kg.nodes, zone, main_net=cgComms[comm], verbose=True,
+                        title=comm, num_columns=len(cgKGs), outfile=outdir, show=False,
+                        edge_score_accessor=lambda x: x.get("fc_score", 0), node_score_accessor=lambda x: x.get("fc_score", 0))
+
+    #
+    ##
+    ### Filter functions!
+    ##
+    #
+    def _geneset_filter(self, n, kg):
+    
+        if kg.node_type_overlap(n, ["disease", "geneset"]):
+            if len(kg._get_predecessors(n, ntype="gene")) < 10:
+                return False
+    
+            if kg.kg.nodes[n]["fc"]["sig"] > 0.001:
+                return False
+       
+        elif kg.node_type_overlap(n, ["gene"]):
+            if kg.kg.nodes[n]["fc"]["sig"] > 0.1:
+                return False
+    
+        else:
+            #drug, ncRNA
+            if kg.kg.nodes[n]["fc"]["sig"] > 0.1:
+                return False
+    
+        return True
+    
+    def _filter_empty_genesets(self, n, kg):
+    
+        if kg.node_type_overlap(n, ["disease", "geneset"]):
+            if len(kg._get_predecessors(n, ntype="gene")) < 3:
+                return False
+    
+            numKgChildren = len(kg._get_predecessors(n, ntype="gene"))
+            numAllChildren = len(kg._get_predecessors(n, ntype="gene"))
+    
+            if (numKgChildren/numAllChildren) < 0.5:
+                return False
+        
+    
+        if kg.node_type_overlap(n, ["gene", "ncRNA"]):
+            if len(kg.kg.edges(n)) == 0:
+                return False
+    
+        return True
+    
+    def _filter_singletons(self, n, kg):
+        if len(kg.kg.edges(n)) == 0:
+            return False
+    
+        return True
+        
+    
+    def _combined_filter(self, n, kg):
+        return self._geneset_filter(n,kg) and self._filter_empty_genesets(n, kg)
+
+
+    #
+    ##
+    ### Accessors
+    ##
+    #
+    
+    @property
+    def communities(self):
+        return {k: v for cg in self.cellgroupdata for k, v in self.cellgroupdata[cg].items()}
+
+
+    #
+    ##
+    ### module descriptions
+    ##
+    #
+
+    def _describe_kg(self, kg, name):
+    
+        detailDict = {}
+    
+        detailDict["name"] = name
+    
+        relNodeTypes = ["gene", "geneset", "disease", "drug", "ncRNA", "TF"]
+        allNodes = set()
+        for relNodeType in relNodeTypes:
+            subkg = kg.filter_nodes(lambda x, k: k.node_type_overlap(x, relNodeType))
+    
+            if not relNodeType in ["gene", "ncRNA", "TF"]:
+                nodeDescription = [(x, subkg.kg.nodes[x].get("name", x)) for x in subkg.kg.nodes]
+            else:
+                nodeDescription = [x for x in subkg.kg.nodes]
+            
+            detailDict["{}_nodes".format(relNodeType)] = sorted(nodeDescription)
+            allNodes.update(nodeDescription)
+    
+        allNodes = [(x, kg.kg.nodes[x].get("name", x)) for x in kg.kg.nodes]
+        otherNodes = set(allNodes).difference(allNodes)
+        detailDict["other_nodes"] = otherNodes
+    
+        return detailDict
+
+    def describe_modules(self, relevant_cellgroups=None):
+
+        if relevant_cellgroups is None:
+            relevant_cellgroups = [x for x in self.cellgroupdata]
+        
+        allModuleDescriptions = []
+        for cg in self.cellgroupdata:
+
+            cgKGs = self.cellgroupdata[cg]["kg"]
+            #cgComms = self.cellgroupdata[cg]["communities"]
+            cgDetails = self.cellgroupdata[cg]["communities_details"]
+            cgSigKG = self.cellgroupdata[cg]["communities_enhanced"]
+        
+            for comm in cgSigKG:
+        
+                ckg = cgSigKG[comm]
+        
+                ddict = self._describe_kg(ckg, comm)
+        
+                for cname in cgDetails[comm]:
+                    zonename = cname.split("_",1)[1]
+                    ddict["{}_score_median".format(zonename)] = cgDetails[comm][cname]["median"]
+                    ddict["{}_score_mean".format(zonename)] = cgDetails[comm][cname]["mean"]
+                    ddict["{}_cohend".format(zonename)] = cgDetails[comm][cname]["cohend"]
+        
+                    gene_nodes = list(ckg.filter_nodes(lambda x, k: k.node_type_overlap(x, "gene")).kg.nodes)
+                    disease_nodes = list(ckg.filter_nodes(lambda x, k: k.node_type_overlap(x, "disease")).kg.nodes)
+                    drug_nodes = list(ckg.filter_nodes(lambda x, k: k.node_type_overlap(x, "drug")).kg.nodes)
+        
+                    absGeneScores = cgKGs[cname].get_node_scores(nodes=gene_nodes, score_accessor=lambda x: x.get("score", 0))
+                    absDiseaseScores = cgKGs[cname].get_node_scores(nodes=disease_nodes, score_accessor=lambda x: x.get("score", 0))
+                    absDrugScores = cgKGs[cname].get_node_scores(nodes=drug_nodes, score_accessor=lambda x: x.get("score", 0))
+        
+                    #print(cname, "genes", absGeneScores, np.mean(absGeneScores))
+                    #print(cname, "disease", absDiseaseScores, np.mean(absDiseaseScores))
+                    #print(cname, "drugs", absDrugScores, np.mean(absDrugScores))
+                    
+                    ddict["{}_absmean-gene".format(zonename)] = np.mean(absGeneScores)
+                    ddict["{}_absmean-disease".format(zonename)] = np.mean(absDiseaseScores)
+                    ddict["{}_absmean-drug".format(zonename)] = np.mean(absDrugScores)
+        
+                    ddict["{}_diffmean-gene".format(zonename)] = np.mean(cgKGs[cname].get_node_scores(nodes=gene_nodes, score_accessor=lambda x: x.get("fc_score", 0)))
+                    ddict["{}_diffmean-disease".format(zonename)] = np.mean(cgKGs[cname].get_node_scores(nodes=disease_nodes, score_accessor=lambda x: x.get("fc_score", 0)))
+                    ddict["{}_diffmean-drug".format(zonename)] = np.mean(cgKGs[cname].get_node_scores(nodes=drug_nodes, score_accessor=lambda x: x.get("fc_score", 0)))
+        
+               
+                refKgName = comm.split( self.name_sep )[0]
+                refKG = cgKGs[refKgName]
+        
+                ddict["base_condition"] = refKgName
+        
+                #eCKG = enhance_kg_genesets_sloppy(ckg, refKG)
+                #geneSetEnhanced = [(x, eCKG.kg.nodes[x].get("name", x)) for x in eCKG.kg.nodes if eCKG.node_type_overlap(x, "geneset")]
+                #ddict["geneset_nodes_enhanced"] = geneSetEnhanced
+        
+                #ddict = {x: ddict[x] for x in sorted([y for y in ddict])}
+                
+                allModuleDescriptions.append(ddict)
+        
+        descrDF = pd.DataFrame(allModuleDescriptions)
+        #descrDF.to_csv("diff_modules_description.tsv", sep="\t")
+        return descrDF
+
+
+    def create_overlap_df(self, outfile, nodetype):
+        
+        all_genesets = [x for x in self.fullKG.kg.nodes if self.fullKG.node_type_overlap(x, nodetype)]
+    
+        genesetDict = {x: set(self.fullKG._get_predecessors(x, ntype="gene", n=1)) for x in all_genesets}
+        genesetDict = {x: genesetDict[x] for x in genesetDict if len(genesetDict[x]) > 0}
+        print(len(genesetDict))
+    
+        allModuleGenesetOverlaps = []
+        for cg in self.cellgroupdata:
+
+            cgKGs = self.cellgroupdata[cg]["kg"]
+            cgComms = self.cellgroupdata[cg]["communities"]
+            cgDetails = self.cellgroupdata[cg]["communities_details"]
+            cgSigKG = self.cellgroupdata[cg]["communities_enhanced"]
+        
+        
+            for comm in cgSigKG:
+        
+                ckg = cgSigKG[comm]
+                ckg_genes = [x for x in ckg.kg.nodes if ckg.node_type_overlap(x, "gene")]
+        
+                for geneset in genesetDict:
+        
+                    genesetGenes = genesetDict[geneset]
+                    intersect = len(genesetGenes.intersection(ckg_genes))
+                    union = len(genesetGenes.union(ckg_genes))
+        
+                    overlap = intersect / len(genesetGenes)
+                    jaccard = intersect / union
+        
+                    if overlap == 0 and jaccard == 0:
+                        continue
+
+                    genesetName = self.fullKG.kg.nodes[geneset].get("name", geneset)
+                    allModuleGenesetOverlaps.append( (cg, comm, geneset, len(genesetGenes), genesetName, overlap, jaccard) )
+        
+        overlapDF = pd.DataFrame.from_records(allModuleGenesetOverlaps,
+                                              columns=("celltype", "module", nodetype, "{}_size".format(nodetype), "{}_name".format(nodetype), "overlap", "jaccard"))
+        #overlapDF.to_csv(outfile, sep="\t")
+        return overlapDF
+
+
+    def _calculate_gs_overlap(gsType, gsDict, moduleKG):
+    
+        ckg_genes = [x for x in moduleKG.kg.nodes if moduleKG.node_type_overlap(x, "gene")]
+        allModuleGenesetOverlaps = []
+    
+        for geneset in gsDict[gsType]:
+    
+            genesetGenes = gsDict[gsType][geneset]
+            intersect = len(genesetGenes.intersection(ckg_genes))
+            union = len(genesetGenes.union(ckg_genes))
+    
+            overlap = intersect / len(genesetGenes)
+            jaccard = intersect / union
+    
+            if overlap == 0 and jaccard == 0:
+                continue
+            allModuleGenesetOverlaps.append( (geneset, len(genesetGenes), geneset[1], overlap, jaccard) )
+    
+        return allModuleGenesetOverlaps
+
+
+    def _toShortName(x):
+        x = str(x)
+        if len(x) > 20:
+    
+            x = x[:20] + "..."
+        return x
+
+    def describe_module_scrna(self, adata, sc_celltype_column, plot_folder=None, plot_prefix="overview_plot_{}", module_names=None, gsTypes=["disease", "geneset", "drug"], numGenesThreshold=3, numElemsBarPlot=10, hue_colors={"gene": "#239756", "geneset": "#3fc37e", "disease": "#5047ee", "drug": "#e600e6", "NA": "#f37855" }):
+        
+        import scanpy as sc
+        
+        genesetDict = {}
+        for gstype in gsTypes:
+            all_genesets = [x for x in self.fullKG.kg.nodes if self.fullKG.node_type_overlap(x, gstype)]
+    
+            gsDict = {x: set(self.fullKG._get_predecessors(x, ntype="gene", n=1)) for x in all_genesets}
+            gsDict = {(x, self.fullKG.kg.nodes[x].get("name", x)): gsDict[x] for x in gsDict if len(gsDict[x]) > 0}
+    
+            genesetDict[gstype] = gsDict
+        
+            print(gstype, len(gsDict))
+    
+        edgeScoreAccessor = lambda x: x.get("fc_score", 0)
+    
+        allModuleGenesetOverlaps = []
+        for cg in self.cellgroupdata:
+
+            cgKGs = self.cellgroupdata[cg]["kg"]
+            cgComms = self.cellgroupdata[cg]["communities"]
+            cgDetails = self.cellgroupdata[cg]["communities_details"]
+            cgSigKG = self.cellgroupdata[cg]["communities_enhanced"]
+        
+    
+            if module_names is None or not isinstance(module_names, (list, tuple, set)):
+                useModNames = [x for x in cgSigKG]
+            else:
+                useModNames = [x for x in module_names if x in cgSigKG]
+        
+            for comm in useModNames:
+        
+                ckg = cgSigKG[comm]
+    
+                all_genes = [x for x in ckg.kg.nodes if self.fullKG.node_type_overlap(x, ["gene", "TF", "ncRNA"])]
+    
+                print(all_genes)
+    
+                ncols = 1 + len(gsTypes) + 2
+                wratios = [6] + [2]*len(gsTypes) + [4, 4]
+    
+                figWidth = sum(wratios) * 2
+                print(figWidth)
+    
+                fig = plt.figure(tight_layout=True, figsize=(figWidth, 12))
+                spec2 = gridspec.GridSpec(ncols=ncols, nrows=1, figure=fig, width_ratios=wratios, wspace=0.4)
+    
+                allAxs = []
+                for i in range(ncols):
+                    fax = fig.add_subplot(spec2[0, i])
+                    allAxs.append(fax)
+                
+                gene_expressions = defaultdict(list)
+                for cond in cgKGs:
+                    condkg = cgKGs[cond]
+    
+                    gene_expressions[cond] = condkg.get_edge_scores(edgeScoreAccessor, nodes=all_genes)
+                    #print(cond, gene_expressions[cond])
+    
+                minValue = 0
+                maxValue = 0
+                for cond in gene_expressions:
+                    #print(cond, len(gene_expressions[cond]), gene_expressions[cond])
+    
+                    minValue = min(gene_expressions[cond] + [minValue])
+                    maxValue = max(gene_expressions[cond] + [maxValue])
+                    
+                    _ = allAxs[-2].hist(gene_expressions[cond], len(gene_expressions[cond]), density=True,
+                                    histtype='step', cumulative=True, label='{}'.format(cond))
+    
+                allAxs[-2].grid(True)
+                allAxs[-2].legend(loc='right')
+                allAxs[-2].set_title("Edge Scores per DKG")
+    
+                allAxs[-2].spines['top'].set_visible(False)
+                allAxs[-2].spines['right'].set_visible(False)
+                #allAxs[-2].spines['bottom'].set_visible(False)
+                #allAxs[-2].spines['left'].set_visible(False)
+                
+                ckg.plot_graph(ax=allAxs[0],
+                               edge_score_accessor=edgeScoreAccessor,
+                               node_score_accessor=edgeScoreAccessor, close=False,
+                               edge_score_normalizer = plt.Normalize(vmin = minValue, vmax=maxValue)
+                              )
+                allAxs[0].set_title("Knowledge Graph Module {}".format(comm))
+    
+    
+                for gsi, gstype in enumerate(gsTypes):
+        
+                    diseaseStat = self._calculate_gs_overlap(gstype, genesetDict, ckg)   
+                    diseaseStat = sorted(diseaseStat, key=lambda x: x[3], reverse=True)
+                    diseaseDF = pd.DataFrame(diseaseStat, columns=["key", "num_genes", "name", "overlap", "jaccard"])
+                    diseaseDF = diseaseDF[diseaseDF.num_genes >= numGenesThreshold]
+                    diseaseDF["label"] = diseaseDF[['key','num_genes']].apply(lambda x : '{}\n({}, n={})'.format(self._toShortName(x['key'][1]), self._toShortName(x['key'][0]), x['num_genes']), axis=1)
+    
+                    useAX = allAxs[ gsi + 1 ]
+    
+                    g=sns.barplot(y="label", x="overlap",  data=diseaseDF[: numElemsBarPlot], orient = 'h', color=hue_colors.get(gstype, None), ax=useAX)
+                    useAX.tick_params(axis='y', rotation=30)
+                    useAX.margins(x = 0.3, tight=True)
+    
+                    useAX.set_title("Most overlapped {}".format(gstype))
+    
+                    useAX.spines['top'].set_visible(False)
+                    useAX.spines['right'].set_visible(False)
+                    #useAX.spines['bottom'].set_visible(False)
+                    #useAX.spines['left'].set_visible(False)
+    
+    
+    
+                scgenes = [x for x in all_genes if x in adata.var_names]
+    
+                #sc.tl.score_genes(adata, scgenes, score_name=comm) [comm]+
+                
+                allAxs[-1].set_title("Expression of module genes in {}".format(cg))
+                sc.pl.dotplot(adata[adata.obs[sc_celltype_column] == cg], scgenes, "ct_condition", swap_axes=True, ax=allAxs[-1], show=False)
+    
+                fig.tight_layout()
+    
+                if not plot_folder is None and not plot_prefix is None:
+                    outfile = "{}/{}.png".format(plot_folder, plot_prefix.format(comm))
+                    print("Saving plot for module", comm, ": ", outfile)
+                    plt.savefig(outfile)
+                
+                plt.show()
+                plt.close()
+    
+                
+    def available_cellgroups(self):
+        return [x for x in self.tldict]
