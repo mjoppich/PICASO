@@ -39,6 +39,7 @@ from llama_cpp import Llama
 # from https://stackoverflow.com/questions/25500541/matplotlib-bwr-colormap-always-centered-on-zero
 import matplotlib
 from mpl_toolkits.axes_grid1 import make_axes_locatable
+from wordcloud import WordCloud, STOPWORDS
 
 # pip install scanpy matplotlib leidenalg>=0.10.2 pandas numpy huggingface-hub goatools biopython python-louvain markov_clustering adjustText infomap progressbar2
 
@@ -4025,3 +4026,17 @@ Helpful answer:
         
         ## Unpack and the generated text from the LLM response dictionary and print it
         return res["choices"][0]["text"].strip()
+
+
+    def query_wordcloud(self, gene_list, context):
+        
+        text = self.query_genelist(gene_list, context)
+        
+        wc_rect = WordCloud(background_color="white", max_words=500, width=3000,
+                    height=1500, stopwords=STOPWORDS, min_font_size=2,
+                    contour_width=3, contour_color='black')
+        wc_rect.generate(text)
+        
+        
+        plt.imshow(wc_rect, interpolation='bilinear')
+        plt.axis("off")
