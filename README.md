@@ -1,4 +1,4 @@
-# mikg
+# PICASO
 
 
 ## Creating environment
