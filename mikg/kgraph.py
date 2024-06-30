@@ -33,9 +33,14 @@ from natsort import natsorted
 import networkx as nx
 import progressbar
 
+from huggingface_hub import hf_hub_download
+from llama_cpp import Llama
+
 # from https://stackoverflow.com/questions/25500541/matplotlib-bwr-colormap-always-centered-on-zero
 import matplotlib
 from mpl_toolkits.axes_grid1 import make_axes_locatable
+
+# pip install scanpy matplotlib leidenalg>=0.10.2 pandas numpy huggingface-hub goatools biopython python-louvain markov_clustering adjustText infomap progressbar2
 
 
 class MidpointNormalize(matplotlib.colors.Normalize):
@@ -1216,7 +1221,8 @@ class KGraph:
                 nodecolors = {"gene": "#239756", "geneset": "#3fc37e", "disease": "#5047ee", "drug": "#e600e6", "NA": "#f37855" },
                 nodeshapes = {"gene": "o", "geneset": "s", "disease": "^", "drug": "p", "NA": "o" },
                 edge_score_accessor=lambda x: x.get("score", 0),
-                node_score_accessor=lambda x: x.get("score", 0)
+                node_score_accessor=lambda x: x.get("score", 0),
+                legend = True
                 ):   
                 
         if ax is None:
@@ -1227,11 +1233,13 @@ class KGraph:
             es_ax = fig.add_subplot(gs[1, 0])
             ns_ax = fig.add_subplot(gs[1, 1])
         else:
-            divider = make_axes_locatable(ax)
-            es_ax = divider.append_axes("bottom", size="5%", pad=0.5)
-            ns_ax = divider.append_axes("bottom", size="10%", pad=0.5)
-
             
+            if legend:
+                divider = make_axes_locatable(ax)
+                es_ax = divider.append_axes("bottom", size="5%", pad=0.5)
+                ns_ax = divider.append_axes("bottom", size="10%", pad=0.5)
+
+                
             
         G = self.kg
 
@@ -1334,41 +1342,42 @@ class KGraph:
         ax.set_title(title, loc='left')
         
         
-        if edge_score_normalizer is None:
-            edge_score_normalizer = plt.Normalize(vmin = edge_min, vmax=edge_max)
+        if legend:
+            if edge_score_normalizer is None:
+                edge_score_normalizer = plt.Normalize(vmin = edge_min, vmax=edge_max)
+                
+            sm = plt.cm.ScalarMappable(cmap=edge_cmap, norm=edge_score_normalizer)
+            cbar = plt.gcf().colorbar(sm, orientation="horizontal", pad=0.1, ax=ax, cax=es_ax, shrink=1.0)
+            cbar.ax.set_xlabel("Edge Score".format())
+                        
             
-        sm = plt.cm.ScalarMappable(cmap=edge_cmap, norm=edge_score_normalizer)
-        cbar = plt.gcf().colorbar(sm, orientation="horizontal", pad=0.1, ax=ax, cax=es_ax, shrink=1.0)
-        cbar.ax.set_xlabel("Edge Score".format())
-                    
-        
-        def get_legend(norm, ax, num=5):
-            
-            sizes = np.linspace(norm.vmin, norm.vmax, num)
-            
-            plotsizes = [node_size_func(x) for x in sizes]
+            def get_legend(norm, ax, num=5):
+                
+                sizes = np.linspace(norm.vmin, norm.vmax, num)
+                
+                plotsizes = [node_size_func(x) for x in sizes]
 
-            xsizes = [i for i in range(0, len(sizes))]
-            ysizes = [0]*len(sizes)
-            sc = ax.scatter(xsizes, ysizes, s=plotsizes, color='#239756')
-            
-            for i, (xi, yi) in enumerate(zip(xsizes, ysizes)):
-                plt.text(xi, -0.07, "{:.3f}".format(sizes[i]), va='bottom', ha='center', fontsize="small")
+                xsizes = [i for i in range(0, len(sizes))]
+                ysizes = [0]*len(sizes)
+                sc = ax.scatter(xsizes, ysizes, s=plotsizes, color='#239756')
+                
+                for i, (xi, yi) in enumerate(zip(xsizes, ysizes)):
+                    plt.text(xi, -0.07, "{:.3f}".format(sizes[i]), va='bottom', ha='center', fontsize="small")
 
-            ax.get_xaxis().set_visible(False)
-            ax.get_yaxis().set_visible(False)
-            ax.spines['top'].set_visible(False)
-            ax.spines['right'].set_visible(False)
-            ax.spines['bottom'].set_visible(False)
-            ax.spines['left'].set_visible(False)
+                ax.get_xaxis().set_visible(False)
+                ax.get_yaxis().set_visible(False)
+                ax.spines['top'].set_visible(False)
+                ax.spines['right'].set_visible(False)
+                ax.spines['bottom'].set_visible(False)
+                ax.spines['left'].set_visible(False)
+                
+                mid = min(xsizes) + (max(xsizes)-min(xsizes))/2
+                plt.text(mid, -0.1, "Node Score", va='bottom', ha='center', fontsize="small")
+                
             
-            mid = min(xsizes) + (max(xsizes)-min(xsizes))/2
-            plt.text(mid, -0.1, "Node Score", va='bottom', ha='center', fontsize="small")
-            
-        
-        #divider = make_axes_locatable(cbar.ax)
-        #sax = divider.append_axes("right", size='100%')
-        get_legend(node_score_normalizer, ns_ax)
+            #divider = make_axes_locatable(cbar.ax)
+            #sax = divider.append_axes("right", size='100%')
+            get_legend(node_score_normalizer, ns_ax)
         
         
         if close:
@@ -1678,7 +1687,7 @@ class NetworkExtender:
                     for x in geneNeighborsS:
                         acceptX = False
                         for nodeType in nodeTypes:
-                            acceptX = acceptX or (orig_kg.edges[(n, x)].get("{}_spec".format(nodeType), 1.0) > minGeneSpec)
+                            acceptX = acceptX or (orig_kg.edges[(n, x)].get("{}_spec".format(nodeType), 1.0) > minGeneSpec.get(nodeType, 0))
                             if acceptX:
                                 break
                         if acceptX:
@@ -1688,7 +1697,7 @@ class NetworkExtender:
                     for x in geneNeighborsP:
                         acceptX = False
                         for nodeType in nodeTypes:
-                            acceptX = acceptX or (orig_kg.edges[(x,n)].get("{}_spec".format(nodeType), 1.0) > minGeneSpec)
+                            acceptX = acceptX or (orig_kg.edges[(x,n)].get("{}_spec".format(nodeType), 1.0) > minGeneSpec.get(nodeType, 0))
                             if acceptX:
                                 break
                         if acceptX:
@@ -2021,7 +2030,7 @@ class CommunityTool:
         sm = plt.cm.ScalarMappable(cmap=edge_cmap, norm=edge_score_normalizer)
         
         # plot once in order to get node positions!
-        pos=ownKG.plot_graph(ax=flataxs[0], title="--", close=False,
+        pos=ownKG.plot_graph(ax=flataxs[0], title="--", close=False, legend=False,
                              nodetype2color=nodecolors, edge_score_accessor=edge_score_accessor)
         flataxs[0].clear()
         max_node_size=200
@@ -2037,7 +2046,7 @@ class CommunityTool:
                 
                 
                 _=plotKG.plot_graph( ax=flataxs[kgi], pos=pos, title="{} (median score: {:.3f}, mean {:.3f})".format(kgname, kgMedian, kgMean),
-                                    close=False, nodetype2color=nodecolors,
+                                    close=False, legend=False, nodetype2color=nodecolors,
                                     edge_score_normalizer=edge_score_normalizer,
                                     node_score_normalizer=node_score_normalizer,
                                     edge_cmap=edge_cmap,
@@ -2152,14 +2161,22 @@ class CommunityTool:
             plt.scatter( x, y,  s=size, c="blue")
 
         
-        ax.xaxis.set_major_locator(matplotlib.ticker.MultipleLocator(1))
-        ax.yaxis.set_major_locator(matplotlib.ticker.MultipleLocator(1))
+        xLocator = matplotlib.ticker.MultipleLocator(1)
+        xLocator.MAXTICKS=len(modules)+5
+        
+        yLocator = matplotlib.ticker.MultipleLocator(1)
+        yLocator.MAXTICKS=len(modules)+5
+        
+        ax.xaxis.set_major_locator(xLocator)
+        ax.yaxis.set_major_locator(yLocator)
 
         plt.xlim(-1, len(modules))
         plt.ylim(-1, len(modules))
 
         ax.set_xticklabels(["", ""] + modules + [""], rotation=45, ha='right')
         ax.set_yticklabels(["", ""] + modules + [""], rotation=0, ha='right')
+        
+        plt.tight_layout()
 
         #print(ax.get_xticklabels())
         #plt.show()
@@ -3342,9 +3359,9 @@ class TwoLevelDifferentialAnalysis:
         if fullKG is None:
             for x in self.tldict:
                 for y in self.tldict[x]:
-                    self.kg = self.tldict[x][y]
+                    self.fullKG = self.tldict[x][y]
         else:
-            self.kg = fullKG
+            self.fullKG = fullKG
 
         self.output_folder_formatter = output_folder_formatter
 
@@ -3379,11 +3396,11 @@ class TwoLevelDifferentialAnalysis:
                     
             print(sorted_dkgs)
             
-            cg1Data = self._get_diff_comms( sorted_dkgs, minEdgeScore=0.5, min_effect_size=0.8, resolution=12 )
+            cgData = self._get_diff_comms( sorted_dkgs, minEdgeScore=0.5, min_effect_size=0.8, resolution=12 )
 
             self.cellgroupdata[cellgroup]["kg"] = sorted_dkgs
-            for stats in cg1Data:
-                self.cellgroupdata[cellgroup][stats] = cg1Data[stats]
+            for stats in cgData:
+                self.cellgroupdata[cellgroup][stats] = cgData[stats]
 
 
     def _get_diff_comms(self, tkgs,
@@ -3492,14 +3509,17 @@ class TwoLevelDifferentialAnalysis:
             
         
             outdir = self.output_folder_formatter.format(cellgroup)
+            print("Output directory", outdir)
             
             if not os.path.isdir(outdir):
                 os.makedirs(outdir, exist_ok=True)
             
             outname = outdir+"/all_module_heatmap.png"
             
+            cellgroupZones = ["{}_{}".format(cellgroup, x) for x in self.sorted_zones]
+            
             ct.visualize_communities(cgDetails, "Diff {}".format(cellgroup),
-                                     subsetOrderFunc=self.zone_sorter,
+                                     subsetOrderFunc=cellgroupZones.index,
                                      field="mean")
             print(outname)
             plt.savefig(outname)
@@ -3524,7 +3544,7 @@ class TwoLevelDifferentialAnalysis:
             df = pd.DataFrame.from_dict(subgroup_scores)
             sns.violinplot(data=df)
             plt.title(cellgroup)
-            plt.show()
+            plt.savefig(outname)
             plt.close()
             
             if plot_communities:
@@ -3533,8 +3553,11 @@ class TwoLevelDifferentialAnalysis:
                     eKG = cgSigKG[comm]
                     zone = comm.split(self.name_sep)[0]
                     
+                    comm_outfile = "{}/{}".format(outdir, comm)
+                    print(comm_outfile)
+                    
                     ct.plot_community(cgKGs, eKG.kg.nodes, zone, main_net=cgComms[comm], verbose=True,
-                        title=comm, num_columns=len(cgKGs), outfile=outdir, show=False,
+                        title=comm, num_columns=len(cgKGs), outfile=comm_outfile, show=False,
                         edge_score_accessor=lambda x: x.get("fc_score", 0), node_score_accessor=lambda x: x.get("fc_score", 0))
 
     #
@@ -3600,9 +3623,27 @@ class TwoLevelDifferentialAnalysis:
     
     @property
     def communities(self):
-        return {k: v for cg in self.cellgroupdata for k, v in self.cellgroupdata[cg].items()}
+        return {k: v for cg in self.cellgroupdata for k, v in self.cellgroupdata[cg]["communities"].items()}
 
 
+
+    def get_community(self, cid):
+        return self.get_community_representation(cid, "communities")
+
+    def get_community_details(self, cid):
+        return self.get_community_representation(cid, "communities_details")
+    
+    def get_community_kg(self, cid):
+        return self.get_community_representation(cid, "communities_enhanced")
+
+    def get_community_representation(self, cid, key="communities"):
+        
+        for cg in self.cellgroupdata:
+            
+            if cid in self.cellgroupdata[cg][key]:
+                return self.cellgroupdata[cg][key][cid]
+        return None
+    
     #
     ##
     ### module descriptions
@@ -3681,10 +3722,14 @@ class TwoLevelDifferentialAnalysis:
         
                
                 refKgName = comm.split( self.name_sep )[0]
-                refKG = cgKGs[refKgName]
-        
+                refZone = refKgName.split("_",1)[1]
+                
                 ddict["base_condition"] = refKgName
-        
+                ddict["base_zone"] = refZone
+                ddict["base_condition_score_mean"] = ddict.get("{}_score_mean".format(refZone), 0)
+                ddict["base_condition_score_median"] = ddict.get("{}_score_median".format(refZone), 0)
+
+                #refKG = cgKGs[refKgName]
                 #eCKG = enhance_kg_genesets_sloppy(ckg, refKG)
                 #geneSetEnhanced = [(x, eCKG.kg.nodes[x].get("name", x)) for x in eCKG.kg.nodes if eCKG.node_type_overlap(x, "geneset")]
                 #ddict["geneset_nodes_enhanced"] = geneSetEnhanced
@@ -3698,7 +3743,7 @@ class TwoLevelDifferentialAnalysis:
         return descrDF
 
 
-    def create_overlap_df(self, outfile, nodetype):
+    def create_overlap_df(self, nodetype):
         
         all_genesets = [x for x in self.fullKG.kg.nodes if self.fullKG.node_type_overlap(x, nodetype)]
     
@@ -3709,9 +3754,6 @@ class TwoLevelDifferentialAnalysis:
         allModuleGenesetOverlaps = []
         for cg in self.cellgroupdata:
 
-            cgKGs = self.cellgroupdata[cg]["kg"]
-            cgComms = self.cellgroupdata[cg]["communities"]
-            cgDetails = self.cellgroupdata[cg]["communities_details"]
             cgSigKG = self.cellgroupdata[cg]["communities_enhanced"]
         
         
@@ -3741,7 +3783,7 @@ class TwoLevelDifferentialAnalysis:
         return overlapDF
 
 
-    def _calculate_gs_overlap(gsType, gsDict, moduleKG):
+    def _calculate_gs_overlap(self, gsType, gsDict, moduleKG):
     
         ckg_genes = [x for x in moduleKG.kg.nodes if moduleKG.node_type_overlap(x, "gene")]
         allModuleGenesetOverlaps = []
@@ -3762,14 +3804,18 @@ class TwoLevelDifferentialAnalysis:
         return allModuleGenesetOverlaps
 
 
-    def _toShortName(x):
+    def _toShortName(self, x):
         x = str(x)
         if len(x) > 20:
     
             x = x[:20] + "..."
         return x
 
-    def describe_module_scrna(self, adata, sc_celltype_column, plot_folder=None, plot_prefix="overview_plot_{}", module_names=None, gsTypes=["disease", "geneset", "drug"], numGenesThreshold=3, numElemsBarPlot=10, hue_colors={"gene": "#239756", "geneset": "#3fc37e", "disease": "#5047ee", "drug": "#e600e6", "NA": "#f37855" }):
+    def describe_module_scrna(self, adata, sc_celltype_column, sc_condition_column, show_plot=True, plot_folder=None, plot_prefix="overview_plot_{}", module_names=None, gsTypes=["disease", "geneset", "drug"], numGenesThreshold=3, numElemsBarPlot=10, hue_colors={"gene": "#239756", "geneset": "#3fc37e", "disease": "#5047ee", "drug": "#e600e6", "NA": "#f37855" }):
+        
+        if not plot_folder is None:
+            if not os.path.isdir(plot_folder):
+                os.makedirs(plot_folder, exist_ok=True)
         
         import scanpy as sc
         
@@ -3863,20 +3909,25 @@ class TwoLevelDifferentialAnalysis:
                     diseaseStat = sorted(diseaseStat, key=lambda x: x[3], reverse=True)
                     diseaseDF = pd.DataFrame(diseaseStat, columns=["key", "num_genes", "name", "overlap", "jaccard"])
                     diseaseDF = diseaseDF[diseaseDF.num_genes >= numGenesThreshold]
-                    diseaseDF["label"] = diseaseDF[['key','num_genes']].apply(lambda x : '{}\n({}, n={})'.format(self._toShortName(x['key'][1]), self._toShortName(x['key'][0]), x['num_genes']), axis=1)
-    
                     useAX = allAxs[ gsi + 1 ]
-    
-                    g=sns.barplot(y="label", x="overlap",  data=diseaseDF[: numElemsBarPlot], orient = 'h', color=hue_colors.get(gstype, None), ax=useAX)
-                    useAX.tick_params(axis='y', rotation=30)
-                    useAX.margins(x = 0.3, tight=True)
-    
-                    useAX.set_title("Most overlapped {}".format(gstype))
-    
-                    useAX.spines['top'].set_visible(False)
-                    useAX.spines['right'].set_visible(False)
-                    #useAX.spines['bottom'].set_visible(False)
-                    #useAX.spines['left'].set_visible(False)
+
+                    if diseaseDF.shape[0] == 0:
+                        useAX.axis('off')
+                        
+                    else:                    
+                    
+                        diseaseDF["label"] = diseaseDF[['key','num_genes']].apply(lambda x : '{}\n({}, n={})'.format(self._toShortName(x['key'][1]), self._toShortName(x['key'][0]), x['num_genes']), axis=1)
+        
+                        g=sns.barplot(y="label", x="overlap",  data=diseaseDF[: numElemsBarPlot], orient = 'h', color=hue_colors.get(gstype, None), ax=useAX)
+                        useAX.tick_params(axis='y', rotation=30)
+                        useAX.margins(x = 0.3, tight=True)
+        
+                        useAX.set_title("Most overlapped {}".format(gstype))
+        
+                        useAX.spines['top'].set_visible(False)
+                        useAX.spines['right'].set_visible(False)
+                        #useAX.spines['bottom'].set_visible(False)
+                        #useAX.spines['left'].set_visible(False)
     
     
     
@@ -3884,9 +3935,14 @@ class TwoLevelDifferentialAnalysis:
     
                 #sc.tl.score_genes(adata, scgenes, score_name=comm) [comm]+
                 
-                allAxs[-1].set_title("Expression of module genes in {}".format(cg))
-                sc.pl.dotplot(adata[adata.obs[sc_celltype_column] == cg], scgenes, "ct_condition", swap_axes=True, ax=allAxs[-1], show=False)
-    
+                subadata = adata[adata.obs[sc_celltype_column] == cg]
+                
+                if len(scgenes) == 0 or subadata.shape[0] == 0:
+                    allAxs[-1].axis('off')
+                else:              
+                    allAxs[-1].set_title("Expression of module genes in {}".format(cg))
+                    sc.pl.dotplot(subadata, scgenes, sc_condition_column, swap_axes=True, ax=allAxs[-1], show=False)
+        
                 fig.tight_layout()
     
                 if not plot_folder is None and not plot_prefix is None:
@@ -3894,9 +3950,78 @@ class TwoLevelDifferentialAnalysis:
                     print("Saving plot for module", comm, ": ", outfile)
                     plt.savefig(outfile)
                 
-                plt.show()
+                if show_plot:
+                    plt.show()
                 plt.close()
     
                 
     def available_cellgroups(self):
         return [x for x in self.tldict]
+    
+    
+    
+
+
+class AIDescriptor:
+
+    def __init__(self, model_name = "LoneStriker/BioMistral-7B-DARE-GGUF", model_file = "BioMistral-7B-DARE-Q4_K_M.gguf", local_dir="../llm_addon/model/"):
+        # GLOBAL VARIABLES
+
+        self.model_name = model_name
+        self.model_file = model_file
+        self.local_dir = local_dir
+        
+        self.model_path = hf_hub_download(self.model_name, filename=self.model_file, local_dir=self.local_dir)
+
+        # LOAD THE MODEL
+        self.llm = Llama(
+            model_path=self.model_path,
+            n_ctx=2048,  # Context length to use
+            n_threads=16,            # Number of CPU threads to use
+            n_gpu_layers=0,        # Number of model layers to offload to GPU
+            verbose=False,
+        )
+
+
+    def query_genelist(self, gene_list, context=None, verbose=False):
+
+        
+
+        ## Generation kwargs
+        generation_kwargs = {
+            "max_tokens":-1,
+            "stop":["</s>"],
+            "echo":False, # Echo the prompt in the output
+            "top_k":1, # This is essentially greedy decoding, since the model will always return the highest-probability token. Set this value > 1 for sampling decoding
+            "temperature": 0.9
+        }
+        
+        ## Run inference
+        geneList = ("blood", ["IFI27", "IFITM1", "IFITM3", "IFIT2", "IFIT1", "MT2A", "IFI6", "SIGLEC1", "IFIT3", "RSAD2", "ISG15", "LY6E", "IFI44L", "MX1"])
+        #geneList = ("kidney", ['NOG', 'LHCGR', 'DIO2', 'NPR1', 'SLC8A1', 'NR2F1', 'EGFL7', 'JARID2', 'HJV', 'PLOD1', 'SHOX2', 'ADRB3', 'TBX3', 'ATP11B', 'COX6C', 'BMPR1A', 'APOC3', 'CALR', 'ATF2', 'TPO', 'FGF10', 'NCOR2', 'RBM19', 'LMBR1L', 'TRMT1', 'FOXH1', 'ELSPBP1', 'TBX18', 'ME3', 'RGMB', 'LEMD3', 'ACOT11', 'PCP2', 'TBX6', 'TBX20', 'RGMA', 'ANK2', 'BMP5', 'GATA5', 'ZFYVE16', 'SCGB1A1', 'SMAD9', 'SLC47A1', 'NOS3', 'HIPK1', 'SUMO1', 'DRAP1', 'BMP2', 'BMPR2', 'CHRDL1', 'TBX1', 'LYL1', 'NKX2-5', 'APOA2', 'GJA5', 'APOA4', 'SLC5A5', 'HMGA2', 'ACTA2', 'HIPK2', 'DHX9', 'CHRD', 'MOV10L1', 'ACVRL1', 'PKD1', 'HFE', 'TBX5', 'CCDC89', 'SERPINB3', 'PRKD3', 'SIRT1', 'PLA2G1B', 'ETV2', 'mir-513a', 'SRA1', 'mir-320a', 'mir-1', 'mir-214', 'mir-223', 'mir-185', 'mir-125b', 'mir-155', 'mir-137', 'mir-206', 'mir-4271', 'mir-122', 'mir-647', 'mir-335', 'mir-543', 'mir-19b', 'mir-92a', 'mir-106a', 'mir-96', 'mir-143', 'mir-145', 'mir-17', 'mir-18a', 'mir-19a', 'mir-20a', 'mir-21', 'mir-141', 'mir-181a', 'mir-27a', 'mir-200a', 'mir-200b'])
+
+        contextString = ""
+
+        if not context is None:
+            contextString = " in {}".format(context)
+        
+        genePrompt = "The following genes are dysregulated{}: {}. How are these genes connected and which molecular functions are altered?".format(contextString,", ".join([str(x) for x in gene_list]))
+        
+        prompt = """Use the following pieces of information to answer the user's question.
+If you don't know the answer, just say that you don't know, don't try to make up an answer.
+
+Question: {}
+
+Do not repeat functions of single genes. Highlight genes for which a clinical trial is running or has been completed.
+
+Only return the helpful answer. Answer must be concise, detailed and well explained.
+Helpful answer:
+        """.format(genePrompt)
+
+        if verbose:
+            print(prompt)
+                
+        res = self.llm(prompt, **generation_kwargs) # Res is a dictionary
+        
+        ## Unpack and the generated text from the LLM response dictionary and print it
+        return res["choices"][0]["text"].strip()
