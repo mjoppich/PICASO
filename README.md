@@ -13,5 +13,4 @@
 
     pip install scanpy networkx scikit-learn natsort seaborn matplotlib leidenalg markov_clustering
 
-    pip install huggingface_hub llama-cpp-python
-    pip install 'transformers[tf-cpu]'
+    pip install huggingface_hub llama-cpp-python 'transformers[tf-cpu]'

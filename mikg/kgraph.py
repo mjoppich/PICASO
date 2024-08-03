@@ -1002,7 +1002,7 @@ class KGraph:
         
         return sub_kg
 
-    def get_communities_connectedcomponent(self, minEdgeScore = 3.0, resolution=5, prefix="Module", sep="_", score_field="score"):
+    def get_communities_connectedcomponent(self, minEdgeScore = 3.0, resolution=5, prefix="Community", sep="_", score_field="score"):
         
         sub_kg_ud = self._filter_edge_score(score_field, minEdgeScore=minEdgeScore)
         
@@ -1013,7 +1013,7 @@ class KGraph:
             
         return stage_comms
     
-    def get_communities_greedymodularity(self, minEdgeScore = 3.0, resolution=0.5, prefix="Module", sep="_", score_field="score"):
+    def get_communities_greedymodularity(self, minEdgeScore = 3.0, resolution=0.5, prefix="Community", sep="_", score_field="score"):
                
         sub_kg_ud = self._filter_edge_score(score_field, minEdgeScore=minEdgeScore)
                
@@ -1025,7 +1025,7 @@ class KGraph:
         return stage_comms
     
     
-    def get_communities_asyn_label_propagation(self, minEdgeScore = 3.0, prefix="Module", sep="_", score_field="score", seed=None):
+    def get_communities_asyn_label_propagation(self, minEdgeScore = 3.0, prefix="Community", sep="_", score_field="score", seed=None):
                
         sub_kg_ud = self._filter_edge_score(score_field, minEdgeScore=minEdgeScore)
         
@@ -1040,7 +1040,7 @@ class KGraph:
         return stage_comms
     
     
-    def get_communities(self, minEdgeScore = 3.0, resolution=5, prefix="Module", sep="_", score_field="score"):
+    def get_communities(self, minEdgeScore = 3.0, resolution=5, prefix="Community", sep="_", score_field="score"):
         
         sub_kg_ud = self._filter_edge_score(score_field, minEdgeScore=minEdgeScore)
         partition = community.best_partition(sub_kg_ud, weight=score_field, resolution=resolution, random_state=self.random_state)
@@ -1051,7 +1051,7 @@ class KGraph:
             
         return rev_partition
     
-    def get_communities_ecg(self, minEdgeScore = 3.0, resolution=5, ens_size=16, prefix="Module", sep="_", score_field="score"):
+    def get_communities_ecg(self, minEdgeScore = 3.0, resolution=5, ens_size=16, prefix="Community", sep="_", score_field="score"):
         import partition_networkx
         import community
         
@@ -1066,7 +1066,7 @@ class KGraph:
       
     
     
-    def get_communities_negpos(self, max_comm_size=50, prefix="Module", sep="_", score_field="score"):
+    def get_communities_negpos(self, max_comm_size=50, prefix="Community", sep="_", score_field="score"):
         
         #sub_kg = self.kg.edge_subgraph([x for x in self.kg.edges if ((minEdgeScore is None) or (self.kg.edges[x].get(score_field, 0) > minEdgeScore))]).copy()
         sub_kg = self.kg.copy()
@@ -1093,7 +1093,7 @@ class KGraph:
             
         return mod2nodes
     
-    def get_communities_infomap(self, prefix="Module", sep=","):
+    def get_communities_infomap(self, prefix="Community", sep=","):
         """
         Partition network with the Infomap algorithm.
         Annotates nodes with 'community' id and return number of communities found.
@@ -1132,7 +1132,7 @@ class KGraph:
         return stage_comms
     
     
-    def get_communities_link(self, minEdgeScore=3.0, threshold=0.15, score_field="score", prefix="Module", sep="_"):
+    def get_communities_link(self, minEdgeScore=3.0, threshold=0.15, score_field="score", prefix="Community", sep="_"):
         
         link_comm_file = os.path.join(os.path.dirname(__file__), "link_clustering.py")
         interpreter = sys.executable
@@ -1208,6 +1208,64 @@ class KGraph:
         ret.kg = self.get_nx_subgraph(genes)
         
         return ret
+
+
+    def plot_graph_network(self, outfile=None, notebook=False):
+        
+        def to_pd_df(G, edge_weights=None, node_weights=None,
+                        nodetype2color={"gene": "#239756", "geneset": "#3fc37e", "disease": "#5047ee", "drug": "#3026c1", "NA": "#f37855" },
+                        nodecolors = {"gene": "#239756", "geneset": "#3fc37e", "disease": "#5047ee", "drug": "#e600e6", "NA": "#f37855" },
+                        nodeshapes = {"gene": "o", "geneset": "s", "disease": "^", "drug": "p", "NA": "o" }):
+
+            edge_records = []
+            for edge in G.edges:
+                value = G.edges[edge].get(edge_weights, 1)
+                value = len(G.in_edges(edge[0])) * len(G.in_edges(edge[1]))
+                
+                edge_records.append((
+                    edge[0],
+                    edge[1],
+                    value
+                ))
+
+            edgeDF = pd.DataFrame.from_records(edge_records, columns=["source", "target", "weight"])
+
+            node_records = []
+            for node in G.nodes:
+                value = G.nodes[node].get(node_weights, 1)
+
+                color = nodecolors.get(sorted(G.nodes[node].get("type", ["NA"]))[0], "#f37855")
+                shape = nodeshapes.get(sorted(G.nodes[node].get("type", ["NA"]))[0], "#f37855")
+
+                nodeName = G.nodes[node].get("name", node)
+                label = "{}\n({})".format(nodeName, node)
+
+                node_records.append( (node, label, color, shape, value) )
+            
+            nodeDF = pd.DataFrame.from_records(node_records, columns=["node", "label", "color", "shape", "weight"])
+            nodeDF.set_index("node", inplace=True, drop=False)
+
+            return nodeDF, edgeDF
+
+        hkg_node_df, hkg_edge_df = to_pd_df(self.kg)
+
+        from d3blocks import D3Blocks
+        d3 = D3Blocks()
+        d3.elasticgraph(hkg_edge_df, single_click_expand=False, collision =5.0, charge=5000)
+        d3.Elasticgraph.set_edge_properties(directed=True, marker_end='arrow', scaler="zscore", edge_distance=0, minmax=[0.5, 15.0] )
+
+        d3.Elasticgraph.D3graph.set_node_properties(opacity='degree', size='degree')
+
+        for rowi, row in hkg_node_df.iterrows():
+            d3.Elasticgraph.D3graph.node_properties[row["node"]]["label"] = row["label"]
+            d3.Elasticgraph.D3graph.node_properties[row["node"]]["color"] = row["color"]
+            d3.Elasticgraph.D3graph.node_properties[row["node"]]["fontcolor"] = row["color"]
+
+            #d3.Elasticgraph.D3graph.node_properties[row["node"]]["size"] = 10*row["weight"]
+
+        d3.Elasticgraph.D3graph.config["support"] = False
+
+        d3.Elasticgraph.D3graph.show(filepath=outfile, notebook=notebook, show_slider=False)
 
 
     def get_nx_subgraph(self, genes):
@@ -1926,8 +1984,8 @@ class CommunityTool:
         modDF.index = ["{} ({})".format(x, field) for x in allSubsets] #["{}_mean".format(x) for x in allSubsets]
 
         g = sns.clustermap(modDF, figsize=((2+0.7*len(details)), 4), row_cluster=False, xticklabels=True, yticklabels=True, annot=show_values)    
-        g.ax_heatmap.set_title("{} modules".format(title))
-            
+        g.ax_heatmap.set_title("{} communities".format(title))
+        g.ax_heatmap.set_ylabel("Community Scores per Network")    
          
     def sort_communities(self, comm_details, details=False):
         
@@ -2161,21 +2219,10 @@ class CommunityTool:
             
             plt.scatter( x, y,  s=size, c="blue")
 
-        
-        xLocator = matplotlib.ticker.MultipleLocator(1)
-        xLocator.MAXTICKS=len(modules)+5
-        
-        yLocator = matplotlib.ticker.MultipleLocator(1)
-        yLocator.MAXTICKS=len(modules)+5
-        
-        ax.xaxis.set_major_locator(xLocator)
-        ax.yaxis.set_major_locator(yLocator)
-
-        plt.xlim(-1, len(modules))
-        plt.ylim(-1, len(modules))
-
-        ax.set_xticklabels(["", ""] + modules + [""], rotation=45, ha='right')
-        ax.set_yticklabels(["", ""] + modules + [""], rotation=0, ha='right')
+        ax.set(xticks=np.arange(0, len(modules)), yticks=np.arange(0, len(modules)),
+            xticklabels=modules, yticklabels=modules,
+            xlim=(-1, len(modules)), ylim=(-1, len(modules)))
+        ax.tick_params(axis='x', labelrotation=90)
         
         plt.tight_layout()
 
@@ -2392,8 +2439,8 @@ class GenesetAnnotator:
             
 class DifferentialKG:
     
-    def __init__(self) -> None:
-        pass
+    def __init__(self, pseudocount=0.01) -> None:
+        self.pseudocount=pseudocount
     
     
     def _get_edge_fold_changes(self, kg1:KGraph, kg2: KGraph):
@@ -2425,6 +2472,11 @@ class DifferentialKG:
         return edgeDiffs
 
     def _get_log_foldchange(self, node1Score, node2Score, log2=True):
+        
+        if not self.pseudocount is None:
+            node1Score += self.pseudocount
+            node2Score += self.pseudocount
+        
         if node2Score == 0 and node1Score != 0:
             scoreDiff = 512/1
         elif node1Score == 0 and node2Score != 0:
@@ -3001,7 +3053,7 @@ class ModuleCompare:
     def module_similarities_to_df(self, modSims):
         
         df = pd.DataFrame.from_records([(x[0], x[1], modSims[x]) for x in modSims])
-        df.columns = ["Module1", "Module2", "Similarity"]
+        df.columns = ["Community1", "Community2", "Similarity"]
         df = df.sort_values("Similarity", ascending=False)
         
         return df
@@ -3046,7 +3098,7 @@ class ModuleCompare:
                 modSims[(inMod, oMod)] = similarity
                 similarityNetwork.add_edge(inMod, oMod, weight=similarity)                
 
-        self.draw_network(similarityNetwork, title="Module Overlaps", borderWeightQuantile=borderWeightQuantile)
+        self.draw_network(similarityNetwork, title="Community Overlaps", borderWeightQuantile=borderWeightQuantile)
         return modSims
 
     def network_compare_lca(self, inKGs, max_terms=None, fullKG=None, ns=None, borderWeightQuantile=0.8):
@@ -3144,7 +3196,7 @@ class ModuleCompare:
         df = pd.DataFrame(pca_data)
         df.index = cluster_names
         df.columns = ["pca0", "pca1"]
-        df["Module"] = cluster_names
+        df["Community"] = cluster_names
         df["label"] = cluster_labels
         df['label'] = df['label'].astype('category')
 
@@ -3153,7 +3205,7 @@ class ModuleCompare:
         df.plot.scatter("pca0", "pca1", c="label", colormap='viridis', ax=ax)
 
         texts = []
-        for x, y, s in zip(df["pca0"], df["pca1"], df["Module"]):
+        for x, y, s in zip(df["pca0"], df["pca1"], df["Community"]):
             texts.append(plt.text(x, y, s,fontproperties={'size' : 6}))
             
         adjust_text(texts, force_points=0.2, force_text=0.2,
@@ -3288,7 +3340,7 @@ class CRankExplorer:
                 continue
           
             commScore = self.evaluate_community(set(sigKGs[comm].kg.nodes), mainKG, edge_score_accessor=lambda x: x["fc_score"])
-            commScore["module"] = comm
+            commScore["community"] = comm
             commScores.append(commScore)
         
         commScoreDF = pd.DataFrame(commScores)
@@ -3322,16 +3374,16 @@ class CRankExplorer:
         
         df = pd.DataFrame(pca_data)
         
-        df.index = scoreDF["module"]
+        df.index = scoreDF["community"]
         df.columns = ["pc0", "pc1"]
-        df["Module"] = list(scoreDF["module"])
-        df["label"] = [x.split("_")[0] for x in df["Module"]]
+        df["Community"] = list(scoreDF["community"])
+        df["label"] = [x.split("_")[0] for x in df["community"]]
         df['label'] = df['label'].astype('category')
         
         df.plot.scatter("pc0", "pc1", c="label", colormap='viridis', ax=ax)
 
         texts = []
-        for x, y, s in zip(df["pc0"], df["pc1"], df["Module"]):
+        for x, y, s in zip(df["pc0"], df["pc1"], df["Community"]):
             texts.append(plt.text(x, y, s,fontproperties={'size' : 6}))
             
         adjust_text(texts, force_points=0.2, force_text=0.2,
@@ -3350,7 +3402,7 @@ class TwoLevelDifferentialAnalysis:
 
     def __init__( self, tlDict, sorted_zones, output_folder_formatter, fullKG=None):
 
-        self.tldict = tlDict
+        self.tldict = dict(tlDict)
         self.sorted_zones = sorted_zones
 
         self.name_sep="_mod_"
@@ -3527,8 +3579,8 @@ class TwoLevelDifferentialAnalysis:
             plt.close()
         
             outname = outdir+"/all_module_compare.png"
-            fwidth = 0.15 * len(cgComms)
-            print(fwidth)
+            fwidth = 10 + (0.05 * len(cgComms))
+            #print(fwidth)
         
             ct.compare_modules(cgComms, figsize=(fwidth, fwidth))
             print(outname)
@@ -3545,6 +3597,9 @@ class TwoLevelDifferentialAnalysis:
             df = pd.DataFrame.from_dict(subgroup_scores)
             sns.violinplot(data=df)
             plt.title(cellgroup)
+            plt.ylabel("Edge scores")
+            
+            print(outname)
             plt.savefig(outname)
             plt.close()
             
@@ -3650,6 +3705,43 @@ class TwoLevelDifferentialAnalysis:
     ### module descriptions
     ##
     #
+    
+    def plot_module_description(self, nrow=4, figsize=(10,10), dcolors=None):
+        
+        ncol = int(np.ceil(len(self.cellgroupdata) / nrow))
+        
+        print(ncol, nrow, nrow*ncol, len(self.cellgroupdata))
+        
+        fig, axs = plt.subplots(nrow, ncol, figsize=figsize)
+        faxs = axs.flatten()
+
+        descrDF = self.describe_modules(non_verbose=True)
+        df_labels = descrDF.loc[:,("cellgroup", "base_zone")]
+        df_labels["count"] = 1
+
+        for gi, group in enumerate(sorted([x for x in self.cellgroupdata])):
+            gdf = df_labels[df_labels["cellgroup"] == group]
+
+            def absolute_value(val):
+                a  = np.round(val/100.*gdf.shape[0], 0)
+                return "{} ({}%)".format(int(a), round(val))
+
+
+            sgdf = gdf.groupby(['base_zone']).sum()
+            
+            colors = None
+            if not dcolors is None:
+                colors = [dcolors[x] for x in sgdf.index]
+            
+            sgdf.plot( 
+            kind='pie', y='count', autopct=absolute_value, startangle=60, ax=faxs[gi], explode=[0.07 if x % 2 == 0 else 0.0 for x in range(sgdf.shape[0])], colors=colors) 
+            faxs[gi].set_title("{} (n={})".format(group, gdf.shape[0]))
+            faxs[gi].get_legend().remove()
+            faxs[gi].set_ylabel("")
+
+        for i in range(gi+1, len(faxs)):
+            faxs[i].set_visible(False)      
+              
 
     def _describe_kg(self, kg, name):
     
@@ -3676,7 +3768,7 @@ class TwoLevelDifferentialAnalysis:
     
         return detailDict
 
-    def describe_modules(self, relevant_cellgroups=None):
+    def describe_modules(self, relevant_cellgroups=None, non_verbose=False):
 
         if relevant_cellgroups is None:
             relevant_cellgroups = [x for x in self.cellgroupdata]
@@ -3695,32 +3787,33 @@ class TwoLevelDifferentialAnalysis:
         
                 ddict = self._describe_kg(ckg, comm)
         
-                for cname in cgDetails[comm]:
-                    zonename = cname.split("_",1)[1]
-                    ddict["{}_score_median".format(zonename)] = cgDetails[comm][cname]["median"]
-                    ddict["{}_score_mean".format(zonename)] = cgDetails[comm][cname]["mean"]
-                    ddict["{}_cohend".format(zonename)] = cgDetails[comm][cname]["cohend"]
-        
-                    gene_nodes = list(ckg.filter_nodes(lambda x, k: k.node_type_overlap(x, "gene")).kg.nodes)
-                    disease_nodes = list(ckg.filter_nodes(lambda x, k: k.node_type_overlap(x, "disease")).kg.nodes)
-                    drug_nodes = list(ckg.filter_nodes(lambda x, k: k.node_type_overlap(x, "drug")).kg.nodes)
-        
-                    absGeneScores = cgKGs[cname].get_node_scores(nodes=gene_nodes, score_accessor=lambda x: x.get("score", 0))
-                    absDiseaseScores = cgKGs[cname].get_node_scores(nodes=disease_nodes, score_accessor=lambda x: x.get("score", 0))
-                    absDrugScores = cgKGs[cname].get_node_scores(nodes=drug_nodes, score_accessor=lambda x: x.get("score", 0))
-        
-                    #print(cname, "genes", absGeneScores, np.mean(absGeneScores))
-                    #print(cname, "disease", absDiseaseScores, np.mean(absDiseaseScores))
-                    #print(cname, "drugs", absDrugScores, np.mean(absDrugScores))
-                    
-                    ddict["{}_absmean-gene".format(zonename)] = np.mean(absGeneScores)
-                    ddict["{}_absmean-disease".format(zonename)] = np.mean(absDiseaseScores)
-                    ddict["{}_absmean-drug".format(zonename)] = np.mean(absDrugScores)
-        
-                    ddict["{}_diffmean-gene".format(zonename)] = np.mean(cgKGs[cname].get_node_scores(nodes=gene_nodes, score_accessor=lambda x: x.get("fc_score", 0)))
-                    ddict["{}_diffmean-disease".format(zonename)] = np.mean(cgKGs[cname].get_node_scores(nodes=disease_nodes, score_accessor=lambda x: x.get("fc_score", 0)))
-                    ddict["{}_diffmean-drug".format(zonename)] = np.mean(cgKGs[cname].get_node_scores(nodes=drug_nodes, score_accessor=lambda x: x.get("fc_score", 0)))
-        
+                if not non_verbose:
+                    for cname in cgDetails[comm]:
+                        zonename = cname.split("_",1)[1]
+                        ddict["{}_score_median".format(zonename)] = cgDetails[comm][cname]["median"]
+                        ddict["{}_score_mean".format(zonename)] = cgDetails[comm][cname]["mean"]
+                        ddict["{}_cohend".format(zonename)] = cgDetails[comm][cname]["cohend"]
+            
+                        gene_nodes = list(ckg.filter_nodes(lambda x, k: k.node_type_overlap(x, "gene")).kg.nodes)
+                        disease_nodes = list(ckg.filter_nodes(lambda x, k: k.node_type_overlap(x, "disease")).kg.nodes)
+                        drug_nodes = list(ckg.filter_nodes(lambda x, k: k.node_type_overlap(x, "drug")).kg.nodes)
+            
+                        absGeneScores = cgKGs[cname].get_node_scores(nodes=gene_nodes, score_accessor=lambda x: x.get("score", 0))
+                        absDiseaseScores = cgKGs[cname].get_node_scores(nodes=disease_nodes, score_accessor=lambda x: x.get("score", 0))
+                        absDrugScores = cgKGs[cname].get_node_scores(nodes=drug_nodes, score_accessor=lambda x: x.get("score", 0))
+            
+                        #print(cname, "genes", absGeneScores, np.mean(absGeneScores))
+                        #print(cname, "disease", absDiseaseScores, np.mean(absDiseaseScores))
+                        #print(cname, "drugs", absDrugScores, np.mean(absDrugScores))
+                        
+                        ddict["{}_absmean-gene".format(zonename)] = np.mean(absGeneScores)
+                        ddict["{}_absmean-disease".format(zonename)] = np.mean(absDiseaseScores)
+                        ddict["{}_absmean-drug".format(zonename)] = np.mean(absDrugScores)
+            
+                        ddict["{}_diffmean-gene".format(zonename)] = np.mean(cgKGs[cname].get_node_scores(nodes=gene_nodes, score_accessor=lambda x: x.get("fc_score", 0)))
+                        ddict["{}_diffmean-disease".format(zonename)] = np.mean(cgKGs[cname].get_node_scores(nodes=disease_nodes, score_accessor=lambda x: x.get("fc_score", 0)))
+                        ddict["{}_diffmean-drug".format(zonename)] = np.mean(cgKGs[cname].get_node_scores(nodes=drug_nodes, score_accessor=lambda x: x.get("fc_score", 0)))
+            
                
                 refKgName = comm.split( self.name_sep )[0]
                 refZone = refKgName.split("_",1)[1]
@@ -3729,6 +3822,8 @@ class TwoLevelDifferentialAnalysis:
                 ddict["base_zone"] = refZone
                 ddict["base_condition_score_mean"] = ddict.get("{}_score_mean".format(refZone), 0)
                 ddict["base_condition_score_median"] = ddict.get("{}_score_median".format(refZone), 0)
+                
+                ddict["cellgroup"] = cg
 
                 #refKG = cgKGs[refKgName]
                 #eCKG = enhance_kg_genesets_sloppy(ckg, refKG)
@@ -3779,7 +3874,7 @@ class TwoLevelDifferentialAnalysis:
                     allModuleGenesetOverlaps.append( (cg, comm, geneset, len(genesetGenes), genesetName, overlap, jaccard) )
         
         overlapDF = pd.DataFrame.from_records(allModuleGenesetOverlaps,
-                                              columns=("celltype", "module", nodetype, "{}_size".format(nodetype), "{}_name".format(nodetype), "overlap", "jaccard"))
+                                              columns=("celltype", "community", nodetype, "{}_size".format(nodetype), "{}_name".format(nodetype), "overlap", "jaccard"))
         #overlapDF.to_csv(outfile, sep="\t")
         return overlapDF
 
@@ -3889,7 +3984,10 @@ class TwoLevelDifferentialAnalysis:
     
                 allAxs[-2].grid(True)
                 allAxs[-2].legend(loc='right')
-                allAxs[-2].set_title("Edge Scores per DKG")
+                allAxs[-2].set_title("Edge Scores per DNET")
+                
+                allAxs[-2].set_xlabel("Edge score")
+                allAxs[-2].set_ylabel("Fraction of Edges")
     
                 allAxs[-2].spines['top'].set_visible(False)
                 allAxs[-2].spines['right'].set_visible(False)
@@ -3901,7 +3999,7 @@ class TwoLevelDifferentialAnalysis:
                                node_score_accessor=edgeScoreAccessor, close=False,
                                edge_score_normalizer = plt.Normalize(vmin = minValue, vmax=maxValue)
                               )
-                allAxs[0].set_title("Knowledge Graph Module {}".format(comm))
+                allAxs[0].set_title("Network Community {}".format(comm))
     
     
                 for gsi, gstype in enumerate(gsTypes):
@@ -3941,14 +4039,14 @@ class TwoLevelDifferentialAnalysis:
                 if len(scgenes) == 0 or subadata.shape[0] == 0:
                     allAxs[-1].axis('off')
                 else:              
-                    allAxs[-1].set_title("Expression of module genes in {}".format(cg))
+                    allAxs[-1].set_title("Expression of community genes in {}".format(cg))
                     sc.pl.dotplot(subadata, scgenes, sc_condition_column, swap_axes=True, ax=allAxs[-1], show=False)
         
                 fig.tight_layout()
     
                 if not plot_folder is None and not plot_prefix is None:
                     outfile = "{}/{}.png".format(plot_folder, plot_prefix.format(comm))
-                    print("Saving plot for module", comm, ": ", outfile)
+                    print("Saving plot for community", comm, ": ", outfile)
                     plt.savefig(outfile)
                 
                 if show_plot:
@@ -3984,7 +4082,7 @@ class AIDescriptor:
         )
 
 
-    def query_genelist(self, gene_list, context=None, verbose=False):
+    def query_genelist(self, gene_list, context=None, verbose=False, word_cloud=False):
 
         
 
@@ -3998,9 +4096,6 @@ class AIDescriptor:
         }
         
         ## Run inference
-        geneList = ("blood", ["IFI27", "IFITM1", "IFITM3", "IFIT2", "IFIT1", "MT2A", "IFI6", "SIGLEC1", "IFIT3", "RSAD2", "ISG15", "LY6E", "IFI44L", "MX1"])
-        #geneList = ("kidney", ['NOG', 'LHCGR', 'DIO2', 'NPR1', 'SLC8A1', 'NR2F1', 'EGFL7', 'JARID2', 'HJV', 'PLOD1', 'SHOX2', 'ADRB3', 'TBX3', 'ATP11B', 'COX6C', 'BMPR1A', 'APOC3', 'CALR', 'ATF2', 'TPO', 'FGF10', 'NCOR2', 'RBM19', 'LMBR1L', 'TRMT1', 'FOXH1', 'ELSPBP1', 'TBX18', 'ME3', 'RGMB', 'LEMD3', 'ACOT11', 'PCP2', 'TBX6', 'TBX20', 'RGMA', 'ANK2', 'BMP5', 'GATA5', 'ZFYVE16', 'SCGB1A1', 'SMAD9', 'SLC47A1', 'NOS3', 'HIPK1', 'SUMO1', 'DRAP1', 'BMP2', 'BMPR2', 'CHRDL1', 'TBX1', 'LYL1', 'NKX2-5', 'APOA2', 'GJA5', 'APOA4', 'SLC5A5', 'HMGA2', 'ACTA2', 'HIPK2', 'DHX9', 'CHRD', 'MOV10L1', 'ACVRL1', 'PKD1', 'HFE', 'TBX5', 'CCDC89', 'SERPINB3', 'PRKD3', 'SIRT1', 'PLA2G1B', 'ETV2', 'mir-513a', 'SRA1', 'mir-320a', 'mir-1', 'mir-214', 'mir-223', 'mir-185', 'mir-125b', 'mir-155', 'mir-137', 'mir-206', 'mir-4271', 'mir-122', 'mir-647', 'mir-335', 'mir-543', 'mir-19b', 'mir-92a', 'mir-106a', 'mir-96', 'mir-143', 'mir-145', 'mir-17', 'mir-18a', 'mir-19a', 'mir-20a', 'mir-21', 'mir-141', 'mir-181a', 'mir-27a', 'mir-200a', 'mir-200b'])
-
         contextString = ""
 
         if not context is None:
@@ -4013,7 +4108,7 @@ If you don't know the answer, just say that you don't know, don't try to make up
 
 Question: {}
 
-Do not repeat functions of single genes. Highlight genes for which a clinical trial is running or has been completed.
+Do not repeat functions of single genes.
 
 Only return the helpful answer. Answer must be concise, detailed and well explained.
 Helpful answer:
@@ -4023,20 +4118,32 @@ Helpful answer:
             print(prompt)
                 
         res = self.llm(prompt, **generation_kwargs) # Res is a dictionary
+        resText = res["choices"][0]["text"].strip()
+        
+        if word_cloud:
+            self._plot_wordcloud(resText)
         
         ## Unpack and the generated text from the LLM response dictionary and print it
-        return res["choices"][0]["text"].strip()
+        return resText
+
+    def _plot_wordcloud(self, text):
+        
+        wc_rect = WordCloud(background_color="white", max_words=500, width=3000,
+                    height=1500, stopwords=STOPWORDS, min_font_size=2,
+                    contour_width=3, contour_color='black')
+        
+        atext = re.sub(pattern="[,:;.!]", string=text, repl="").split(" ")
+        atext = [x.lower() for x in atext if not (x.lower() in ["gene", "genes", "important", "major", "function", "cell", "protein", "role", "involved", "encodes", "plays"] or x.lower() in STOPWORDS)]
+
+        wc_rect.generate_from_frequencies(Counter(atext))
+        
+        
+        plt.imshow(wc_rect, interpolation='bilinear')
+        plt.axis("off")
 
 
     def query_wordcloud(self, gene_list, context):
         
         text = self.query_genelist(gene_list, context)
+        self._plot_wordcloud(text)
         
-        wc_rect = WordCloud(background_color="white", max_words=500, width=3000,
-                    height=1500, stopwords=STOPWORDS, min_font_size=2,
-                    contour_width=3, contour_color='black')
-        wc_rect.generate(text)
-        
-        
-        plt.imshow(wc_rect, interpolation='bilinear')
-        plt.axis("off")
