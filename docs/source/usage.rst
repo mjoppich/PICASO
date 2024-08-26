@@ -1,5 +1,5 @@
-Usaging PICASO
-==============
+Using PICASO
+============
 
 .. _installation:
 
@@ -22,6 +22,5 @@ Examples
 
 Please also consider our notebooks for usage examples of the PICASO framework:
 
-- Creating the base :ref:`PICASO network </PICASO/scripts/create_basic_knowledgegraph.ipynb>`
-
-More examples to come.
+.. toctree::
+    create_basic_knowledgegraph
