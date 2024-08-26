@@ -21,7 +21,10 @@ extensions = [
     'autoapi.extension'
 ]
 
-autoapi_dirs = ['./../PICASO/']
+exclude_patterns = ['_build', '**.ipynb_checkpoints']
+
+nbsphinx_execute = 'never'
+autoapi_dirs = ['./../../PICASO/']
 
 intersphinx_mapping = {
     'python': ('https://docs.python.org/3/', None),
