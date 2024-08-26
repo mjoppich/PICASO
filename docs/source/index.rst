@@ -2,7 +2,12 @@
 Welcome to PICASO's documentation!
 **********************************
 
-**PICASO** is a Python library for **P**rofiling **I**ntegrative **C**ommunities of **A**ggregated **S**ingle-cell **O**mics data (**PICASO**).
+.. role:: raw-html(raw)
+   :format: html
+
+
+
+**PICASO** is a Python library for :raw-html:`<strong>P</strong>rofiling <strong>I</strong>ntegrative <strong>C</strong>ommunities of <strong>A</strong>ggregated <strong>S</strong>ingle-cell <strong>O</strong>mics data (<strong>PICASO</strong>)`.
 
 Check out the :doc:`usage` section for further information, including
 how to :ref:`installation` the project.
