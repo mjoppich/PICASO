@@ -18,6 +18,7 @@ extensions = [
     'sphinx.ext.autosummary',
     'sphinx.ext.intersphinx',
     "nbsphinx",
+    "nbsphinx-link",
     'autoapi.extension'
 ]
 
@@ -27,8 +28,6 @@ nbsphinx_execute = 'never'
 
 autoapi_add_toctree_entry = False
 autoapi_dirs = ['./../../PICASO/']
-
-autoapi_root = 'api'
 
 intersphinx_mapping = {
     'python': ('https://docs.python.org/3/', None),

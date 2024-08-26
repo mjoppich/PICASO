@@ -1,8 +1,6 @@
 API
 ===
 
-.. autosummary::
-   :toctree: generated
+.. toctree::
 
-   PICASO
-
+    autoapi/example/index

@@ -1,5 +1,6 @@
 # PICASO: Profiling Integrative Communities of Aggregated Single-cell Omics data
 
+[![Documentation Status](https://readthedocs.org/projects/picaso/badge/?version=latest)](https://picaso.readthedocs.io/en/latest/?badge=latest)
 
 ![alt text](./docs/picaso_framework.png "PICASO Framework")
 
