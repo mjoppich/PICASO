@@ -1,4 +1,7 @@
-# PICASO
+# PICASO: Profiling Integrative Communities of Aggregated Single-cell Omics data
+
+
+![alt text](./docs/picaso_framework.png "PICASO Framework")
 
 ## Abstract
 
