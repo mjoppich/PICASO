@@ -24,7 +24,11 @@ extensions = [
 exclude_patterns = ['_build', '**.ipynb_checkpoints']
 
 nbsphinx_execute = 'never'
+
+autoapi_add_toctree_entry = False
 autoapi_dirs = ['./../../PICASO/']
+
+autoapi_root = 'api'
 
 intersphinx_mapping = {
     'python': ('https://docs.python.org/3/', None),
