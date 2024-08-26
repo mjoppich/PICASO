@@ -18,7 +18,7 @@ extensions = [
     'sphinx.ext.autosummary',
     'sphinx.ext.intersphinx',
     "nbsphinx",
-    "nbsphinx-link",
+    "nbsphinx_link",
     'autoapi.extension'
 ]
 
