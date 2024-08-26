@@ -22,4 +22,6 @@ Examples
 
 Please also consider our notebooks for usage examples of the PICASO framework:
 
-- :ref:`Creating the base PICASO network </PICASO/scripts/create_basic_knowledgegraph.ipynb>`
+- Creating the base :ref:`PICASO network </PICASO/scripts/create_basic_knowledgegraph.ipynb>`
+
+More examples to come.

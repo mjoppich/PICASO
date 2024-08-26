@@ -3,4 +3,4 @@ API
 
 .. toctree::
 
-    autoapi/example/index
+    autoapi/PICASO/index
