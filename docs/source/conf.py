@@ -17,8 +17,11 @@ extensions = [
     'sphinx.ext.autodoc',
     'sphinx.ext.autosummary',
     'sphinx.ext.intersphinx',
-    "nbsphinx"
+    "nbsphinx",
+    'autoapi.extension'
 ]
+
+autoapi_dirs = ['./../PICASO/']
 
 intersphinx_mapping = {
     'python': ('https://docs.python.org/3/', None),
