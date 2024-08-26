@@ -25,6 +25,17 @@ extensions = [
 exclude_patterns = ['_build', '**.ipynb_checkpoints']
 
 nbsphinx_execute = 'never'
+nbsphinx_prolog = """
+
+{% set underscores = [] %}
+{% for c in env.docname  %}
+{{ underscores.append( "=" ) }}
+{% endfor %}
+
+{{env.docname}}
+{{underscores|join("")}}
+
+"""
 
 autoapi_add_toctree_entry = False
 autoapi_dirs = ['./../../PICASO/']

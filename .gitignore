@@ -5,6 +5,8 @@ MI_output
 mi_diff_fibroblasts
 mi_diff_cardiomyocyte
 
+docs/out/
+
 hmi/*
 kpmp/*
 llm_addon/*
