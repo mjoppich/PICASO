@@ -24,9 +24,9 @@ Various single-cell modalities covering transcriptomics, epigenetic and spatio-t
 
 If you find this work helpful for your analysis, `please cite <https://www.biorxiv.org/content/10.1101/2024.08.28.610120v1>`_ :
 
-`PICASO: Profiling Integrative Communities of Aggregated Single-cell Omics data<https://www.biorxiv.org/content/10.1101/2024.08.28.610120v1>`_
-`Markus Joppich, Rafael Kramann, Sikander Hayat<https://www.biorxiv.org/content/10.1101/2024.08.28.610120v1>`_
-`bioRxiv 2024.08.28.610120; doi: https://doi.org/10.1101/2024.08.28.610120 <https://www.biorxiv.org/content/10.1101/2024.08.28.610120v1>`_
+| `PICASO: Profiling Integrative Communities of Aggregated Single-cell Omics data <https://www.biorxiv.org/content/10.1101/2024.08.28.610120v1>`_
+| `Markus Joppich, Rafael Kramann, Sikander Hayat <https://www.biorxiv.org/content/10.1101/2024.08.28.610120v1>`_
+| `bioRxiv 2024.08.28.610120; doi: https://doi.org/10.1101/2024.08.28.610120 <https://www.biorxiv.org/content/10.1101/2024.08.28.610120v1>`_
 
 
 .. image:: ../picaso_framework.png
