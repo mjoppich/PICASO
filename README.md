@@ -47,16 +47,16 @@ After doing so you can use the PICASO framework by importing all functions from 
 
 Please also consider our notebooks for usage examples of the PICASO framework:
 
-- Creating the base PICASO network: [notebook](./blob/main/scripts/create_basic_knowledgegraph.ipynb)
+- Creating the base PICASO network: [notebook](./scripts/create_basic_knowledgegraph.ipynb)
 
-- KPMP snRNA-seq data preparation: [notebook](./blob/main/kpmp/process_snrna.ipynb)
+- KPMP snRNA-seq data preparation: [notebook](./kpmp/process_snrna.ipynb)
 
-- KPMP PICASO data preparation: [notebook](./blob/main/kpmp/kpmp_celltype_zone_prepare.ipynb)
+- KPMP PICASO data preparation: [notebook](./kpmp/kpmp_celltype_zone_prepare.ipynb)
 
-- KPMP PICASO analysis: [notebook](./blob/main/scripts/kpmp_celltype_zone_diff_analysis_objectified.ipynb)
+- KPMP PICASO analysis: [notebook](./scripts/kpmp_celltype_zone_diff_analysis_objectified.ipynb)
 
 
-- Myocardial Infarction PICASO analysis: [notebook](./blob/main/scripts/mi_celltype_zone_diff_analysis.ipynb)
+- Myocardial Infarction PICASO analysis: [notebook](./scripts/mi_celltype_zone_diff_analysis.ipynb)
 
 
 
