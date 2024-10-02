@@ -53,10 +53,10 @@ Please also consider our notebooks for usage examples of the PICASO framework:
 
 - KPMP PICASO data preparation: [notebook](./kpmp/kpmp_celltype_zone_prepare.ipynb)
 
-- KPMP PICASO analysis: [notebook](./scripts/kpmp_celltype_zone_diff_analysis_objectified.ipynb)
+- KPMP PICASO analysis: [notebook](./kpmp/kpmp_celltype_zone_diff_analysis_objectified.ipynb)
 
 
-- Myocardial Infarction PICASO analysis: [notebook](./scripts/mi_celltype_zone_diff_analysis.ipynb)
+- Myocardial Infarction PICASO analysis: [notebook](./myocardial/mi_celltype_zone_diff_analysis.ipynb)
 
 
 
