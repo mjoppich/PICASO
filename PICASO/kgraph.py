@@ -41,8 +41,26 @@ import matplotlib
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from wordcloud import WordCloud, STOPWORDS
 
-# pip install scanpy matplotlib leidenalg>=0.10.2 pandas numpy huggingface-hub goatools biopython python-louvain markov_clustering adjustText infomap progressbar2
+from tqdm import tqdm
 
+# pip install scanpy tqdm matplotlib leidenalg>=0.10.2 pandas numpy huggingface-hub goatools biopython python-louvain markov_clustering adjustText infomap progressbar2
+
+import warnings
+import functools
+
+def deprecated(func):
+    """This is a decorator which can be used to mark functions
+    as deprecated. It will result in a warning being emitted
+    when the function is used."""
+    @functools.wraps(func)
+    def new_func(*args, **kwargs):
+        warnings.simplefilter('always', DeprecationWarning)  # turn off filter
+        warnings.warn("Call to deprecated function {}.".format(func.__name__),
+                      category=DeprecationWarning,
+                      stacklevel=2)
+        warnings.simplefilter('default', DeprecationWarning)  # reset filter
+        return func(*args, **kwargs)
+    return new_func
 
 class MidpointNormalize(matplotlib.colors.Normalize):
     def __init__(self, vmin=None, vmax=None, midpoint=None, clip=False):
@@ -87,6 +105,30 @@ class KGraph:
         
         self.logger = logging.getLogger(kgraph_name)
         self.logger.setLevel(logging.INFO)
+     
+     
+    def _describe_kg(self, relNodeTypes = ["gene", "geneset", "disease", "drug", "ncRNA", "TF"]):
+    
+        detailDict = {}
+    
+        detailDict["name"] = self.kgraph_name        
+        allNodes = set()
+        for relNodeType in relNodeTypes:
+            subkg = self.filter_nodes(lambda x, k: k.node_type_overlap(x, relNodeType))
+    
+            if not relNodeType in ["gene", "ncRNA", "TF"]:
+                nodeDescription = [(x, subkg.kg.nodes[x].get("name", x)) for x in subkg.kg.nodes]
+            else:
+                nodeDescription = [x for x in subkg.kg.nodes]
+            
+            detailDict["{}_nodes".format(relNodeType)] = sorted(nodeDescription)
+            allNodes.update(nodeDescription)
+    
+        allNodes = [(x, self.kg.nodes[x].get("name", x)) for x in self.kg.nodes]
+        otherNodes = set(allNodes).difference(allNodes)
+        detailDict["other_nodes"] = otherNodes
+    
+        return detailDict
                
 
     def is_score_field(self, x):
@@ -130,8 +172,11 @@ class KGraph:
         
     def load_kgraph_base(self, data_dir,
                          go=True, TFs=True, omnipath=True, opentargets=True,
-                         reactome=True, kegg=True, uniprot_loc=True, STRING=True, NPINTER=False,
+                         reactome=True, kegg=True, uniprot_loc=True, STRING=True,
+                         TFLink=False, mgidiseases=True, mirtarbase=False, NPinter=False,
+                         smpdb=True, xdeathdb=True, metalinks=True,
                          ot_min_disease_assoc_score=0.8,
+                         organism="human",
                          hallmark_genesets="kegg_gmts/human/c1.all.v2023.2.Hs.symbols.gmt",
                          curated_genesets="kegg_gmts/human/c2.all.v2023.2.Hs.symbols.gmt"):
         
@@ -139,7 +184,7 @@ class KGraph:
 
         if STRING:
             self.logger.info("Loading STRING Graph")
-            load_STRING(self.kg, self.data_dir)
+            load_STRING(self.kg, self.data_dir, organism=organism)
             self.print_kg_info()
         
         if TFs:
@@ -147,16 +192,25 @@ class KGraph:
             load_human_transcription_factors(self.kg, self.data_dir)
             self.print_kg_info()
         
+        if TFLink:
+            self.logger.info("Loading TFLink Transcription Factors Graph")
+            load_TFlink(self.kg, self.data_dir, organism=organism)
+            self.print_kg_info()
         if go:
             self.logger.info("Loading GeneOntology Graph")
-            load_go(self.kg, self.data_dir)
+            load_go(self.kg, self.data_dir, organism=organism)
             self.print_kg_info()
             
         if reactome:
             self.logger.info("Loading Reactome Graph")
-            load_reactome(self.kg, self.data_dir)
+            load_reactome(self.kg, self.data_dir, organism=organism)
             self.print_kg_info()
 
+        if mirtarbase:
+            self.logger.info("Loading miRTarBase Graph")
+            load_mirtarbase(self.kg, self.data_dir, organism=organism)
+            self.print_kg_info()
+            
         if kegg:
             self.logger.info("Loading KEGG Graph")
             load_kegg(self.kg, self.data_dir, hallmark_genesets=hallmark_genesets, curated_genesets=curated_genesets)
@@ -164,15 +218,25 @@ class KGraph:
             
         if omnipath:
             self.logger.info("Loading OmniPath Graph")
-            load_omnipath(self.kg, self.data_dir)
+            load_omnipath(self.kg, self.data_dir, organism=organism)
             self.print_kg_info()
             
-        if opentargets:
-            self.logger.info("Loading OpenTargets Graph")
-            load_opentargets(self.kg, self.data_dir, min_disease_association_score=ot_min_disease_assoc_score)
+        if mgidiseases:
+            self.logger.info("Loading OmniPath Graph")
+            load_mgi_disease_ontology(self.kg, self.data_dir, organism=organism)
+            self.print_kg_info()
+            
+        if smpdb:
+            self.logger.info("Loading SMPDB Graph")
+            load_smpdb(self.kg, self.data_dir, organism=organism)
             self.print_kg_info()
 
-        if NPINTER:
+        if opentargets:
+            self.logger.info("Loading OpenTargets Graph")
+            load_opentargets(self.kg, self.data_dir, min_disease_association_score=ot_min_disease_assoc_score, organism=organism)
+            self.print_kg_info()
+
+        if NPinter:
             #NPINTER should always be loaded last, because then all genes are already added to the graph!
             self.logger.info("Loading NPINTER5 Graph")
             load_npinter(self.kg, self.data_dir)
@@ -180,8 +244,20 @@ class KGraph:
             
         if uniprot_loc:
             self.logger.info("Loading Uniprot Cellular Location")
-            load_uniprot_location(self.kg, self.data_dir)
+            load_uniprot_location(self.kg, self.data_dir, organism=organism)
             self.print_kg_info()
+            
+        if xdeathdb:
+            self.logger.info("Loading XDeathDB")
+            load_xdeathdb(self.kg, self.data_dir, organism=organism)
+            self.print_kg_info()
+            
+        if metalinks:
+            self.logger.info("Loading MetaLinks interactions")
+            load_metalinks(self.kg, self.data_dir, organism=organism)
+            self.print_kg_info()
+
+            
             
         #remove singletons
         remove = [node for node,degree in dict(self.kg.degree()).items() if degree < 1]
@@ -718,6 +794,24 @@ class KGraph:
             
         return allScores        
             
+
+    def get_edge_edge_scores_per_type(self, type_accessor=lambda x: x.get("type", None), score_accessor=lambda x: x.get("score", 0), edge_types=None):
+        
+        allScores = defaultdict(list)
+        
+        for iedge, edge in enumerate(self.kg.edges):
+            
+            etype = type_accessor(self.kg.edges[edge])
+            
+            if not edge_types is None:
+                if not etype in edge_types:
+                    continue
+                                
+            edgeScore = score_accessor(self.kg.edges[edge])
+            
+            allScores[etype].append(edgeScore)
+            
+        return allScores        
         
     def plot_score_histogram(self, edge_types=None, score_accessor=lambda x: x.get("score", 0)):
         
@@ -763,6 +857,26 @@ class KGraph:
         ax.set_ylabel('Score')
         ax.set_xticklabels(ax.get_xticklabels(), rotation = 45, horizontalalignment='right')
         
+    def plot_edge_attribute_histogram(self, edge_types=None, score_accessor=lambda x: x.get("score", 0), ax=None, title=None):
+        
+        scores = self.get_edge_scores(edge_types=edge_types, score_accessor=score_accessor)
+     
+        if ax is None:
+            fig, ax = plt.subplots(figsize=(8, 4))
+
+        if title is None:
+            title = 'Score Distribution'
+
+        # plot the cumulative histogram
+        n, bins, patches = ax.hist(scores, len(scores), density=True, histtype='step',
+                                cumulative=True, label=title)
+
+        # tidy up the figure
+        ax.grid(True)
+        ax.legend(loc='right')
+        ax.set_title('Cumulative Histogram of Edge Scores')
+        ax.set_xlabel('Score')
+        ax.set_ylabel('Likelihood of Score')
         
         
     def plot_node_attribute_distribution(self, attribute_accessor, node_types=None, ax=None, title=None):
@@ -1437,7 +1551,7 @@ class KGraph:
             #divider = make_axes_locatable(cbar.ax)
             #sax = divider.append_axes("right", size='100%')
             get_legend(node_score_normalizer, ns_ax)
-        
+
         
         if close:
         
@@ -1707,41 +1821,72 @@ class NetworkExtender:
         pass
     
     
-    def extend_network(self, nodes, fullKG: KGraph, radius=1, scorer:NetworkScorer=None,
+    def extend_network(self, inKG: KGraph, fullKG: KGraph, radius=1, scorer:NetworkScorer=None,
                        min_children_gs=2,
                        max_size_gs=100,
                        minFraction_small = 0.4,
                        minFraction_large = 0.5,
                        node_types = ["geneset", "disease", "ncRNA"],
+                       extend_node_types = ["gene", "TF", "ncRNA"],
                        minGeneSpec={"geneset": 0.8, "disease": 0.6},
                        min_edge_score=1.0,
+                       min_edge_quantile=None,
+                       max_edge_quantile=None,
                        score_field="score",
                        verbose=False):
         
         orig_kg = fullKG.kg
+            
+        in_nodes = [x for x in inKG.kg.nodes]
+        # take all non-gene nodes, but no genesets/diseases
+        extend_nodes = [x for x in inKG.kg.nodes if fullKG.node_type_overlap(x, extend_node_types)]
         
-        if isinstance(nodes, KGraph):
-            nodes = list(nodes.kg.nodes)
+        #
+        ## This setups the quantile based edge checking
+        #
+        edgeScoreQuantiles = None
+        if min_edge_score is None:
+                        
+            exEdgeScores = [orig_kg.edges[x].get(score_field, 0) for x in orig_kg.edges]
+            
+            multiplicator=1
+            if max_edge_quantile > 1:
+                multiplicator = max_edge_quantile
+                max_edge_quantile = 1
+            edgeScoreQuantiles = np.quantile(exEdgeScores, [min_edge_quantile, max_edge_quantile])
+            
+            if multiplicator > 1:
+                edgeScoreQuantiles = tuple([edgeScoreQuantiles[0], multiplicator*edgeScoreQuantiles[1]])
         
+                
         relNodes = set()
-        for en in nodes:
-            sg = nx.ego_graph(orig_kg, en, radius=radius)
+        for en in extend_nodes:
             
-            # take all non-gene nodes, but no genesets/diseases
-            geneNodes = [x for x in sg.nodes if fullKG.node_type_overlap(x, ["gene", "TF"])]
+            checkNodes = set()
             
+            if radius == 1:
+                for oedge in orig_kg.out_edges(en):
+                    checkNodes.add(oedge[0])
+                    checkNodes.add(oedge[1])
+                
+            else:
+                sg = nx.ego_graph(orig_kg, en, radius=radius)
+                checkNodes.update(list(sg.nodes))
+            
+            # remove input nodes! - these do not need to be checked ^_^
+            checkNodes.difference_update(in_nodes)
+                       
             acceptNodes = []
             #acceptNodes = [x for x in sg.nodes if not x in geneNodes]
             #acceptNodes = [x for x in acceptNodes if not fullKG.node_type_overlap(x, ["geneset", "disease", "ncRNA", "drug"])]
             
-            for n in sg.nodes:
+            for n in checkNodes:
                 nodeTypes = orig_kg.nodes[n].get("type", "")
                 if len(set(node_types).intersection(nodeTypes)) > 0:
                                 
                     geneNeighborsS = [x for x in orig_kg.successors(n) if "gene" in orig_kg.nodes[x].get("type", [])]
                     geneNeighborsP = [x for x in orig_kg.predecessors(n) if "gene" in orig_kg.nodes[x].get("type", [])]
                     
-                    # TODO add spec-measure for genesets or diseases!
                     accGeneNeighborsS = []
                     for x in geneNeighborsS:
                         acceptX = False
@@ -1774,10 +1919,15 @@ class NetworkExtender:
                     #get all edges of n in origkg
                     for u, v, data in [x for x in orig_kg.in_edges(n, data=True)] + [x for x in orig_kg.out_edges(n, data=True)]:
                         #if edge could also be in extended nx
-                        if u in nodes or v in nodes:                           
+                        if u in inKG.kg.nodes or v in inKG.kg.nodes:
                             #if not edge score > minscore: continue
-                            if data.get(score_field, 0) > min_edge_score:
-                                accEdges.append((u,v))
+                            
+                            if not min_edge_score is None:
+                                if data.get(score_field, 0) > min_edge_score:
+                                    accEdges.append((u,v))
+                            else:
+                                if edgeScoreQuantiles[0] <= data.get(score_field, 0) <= edgeScoreQuantiles[1]:
+                                    accEdges.append((u,v))
 
                     if len(accEdges) == 0:
                         continue
@@ -1786,7 +1936,7 @@ class NetworkExtender:
                         containedNeighbours = 0
                         fractionNeighbours = 0
                     else:
-                        containedNeighbours = len(set(geneNeighbors).intersection( nodes ))
+                        containedNeighbours = len(set(geneNeighbors).intersection( in_nodes ))
                         fractionNeighbours = containedNeighbours/len(geneNeighbors)
                     
                     if len(geneNeighbors) < min_children_gs:
@@ -1806,17 +1956,20 @@ class NetworkExtender:
                             acceptNodes.append(n)
             
             relNodes.update(acceptNodes)
-            
-        if verbose:
-            print("Input Graph Nodes", len(nodes))
-            print("Extended Graph Nodes", len(relNodes))
+                   
+        enodes = set(list(relNodes) + list(in_nodes))
         
-        enodes = set(list(relNodes) + list(nodes))
+        if verbose:
+            print("Extending", str(extend_node_types) , "on", str(node_types))
+            print("Input Graph Nodes", len(in_nodes))
+            print("Extension Graph Nodes", len(relNodes))
+            print("Total nodes", len(enodes))
                 
         okg = KGraph(fullKG.random_state, kgraph_name="nwe_sub")
         okg.kg = nx.subgraph(fullKG.kg, enodes).copy()
         
         if verbose:
+            print("Extended Graph Nodes", len(okg.kg.nodes))
             print("Extended Graph Edges", len(okg.kg.edges))
         
         if not scorer is None:
@@ -1824,7 +1977,8 @@ class NetworkExtender:
             
         return okg
     
-    def extend_network_force(self, eKG:KGraph, fullKG:KGraph, nodetype, acceptor=None, edge_acceptor=None, minSpec=0.5):
+    @deprecated
+    def extend_network_force(self, eKG:KGraph, fullKG:KGraph, nodetype, acceptor=None, edge_acceptor=None, minSpec=0.5):       
         
         graphnodes = [x for x in eKG.kg.nodes]
         for n in graphnodes:
@@ -1871,9 +2025,62 @@ class NetworkExtender:
                     
                 for x in fullKG.kg.edges[(edge[0], edge[1])]:
                     eKG.kg.edges[(edge[0], edge[1])][x] = fullKG.kg.edges[(edge[0], edge[1])][x]
-            
     
-    def extend_nodetypes(self, eKG:KGraph, fullKG:KGraph, nodetype, node_score_accessor=None, edge_score_accessor=None, min_node_score=0.5, verbose=False):
+    
+    def extend_by_overlap(self, eKG:KGraph, diffKG:KGraph, n_overlap=10,
+                          min_node_score=0.1, min_edge_score=0.1,
+                          edge_score_accessor=lambda x: x.get("fc_score", 0),
+                          node_score_accessor=lambda x: x.get("fc_score", 0)
+                          ):
+        
+        potentialTFs = Counter()
+        tf2targets = defaultdict(set)
+
+        mod_geneKG = eKG.to_gene_kgraph()
+
+        for gene in mod_geneKG.kg.nodes:
+
+            for ogene, _ in diffKG.kg.in_edges(gene):
+                if diffKG.node_type_overlap(ogene, ["TF"]):
+                    potentialTFs[ogene] += 1
+                    tf2targets[ogene].add(gene)
+
+        potentialTFs.most_common(n_overlap)
+    
+        records = []
+        for gene in potentialTFs:
+            edgeScores = set()
+            for tgt in tf2targets[gene]:
+                tfedge = diffKG.kg.edges[(gene, tgt)]
+                
+                edgeScores.add((tfedge["type"], edge_score_accessor(tfedge)))
+
+            nodeScore = node_score_accessor(diffKG.kg.nodes[gene])
+            edgeScore = np.mean([x[1] for x in edgeScores])    
+
+            if nodeScore < min_node_score or edgeScore < min_edge_score:
+                continue
+
+            records.append((gene, len(tf2targets[gene]), nodeScore, edgeScore))
+            
+            #print(gene, potentialTFs[gene], nodeScore, edgeScore, edgeScores)
+            #print()
+
+        if len(records) == 0:
+            return None
+        
+        relevantTFs = pd.DataFrame.from_records(records)
+        relevantTFs.columns = ["gene", "targets", "node_score", "mean_edge_score"]
+        relevantTFs=relevantTFs.sort_values("mean_edge_score", ascending=False)
+        
+        return relevantTFs
+    
+    
+    
+    def extend_nodetypes(self, eKG:KGraph, fullKG:KGraph, nodetype,
+                         node_score_accessor=None,
+                         edge_score_accessor=None,
+                         min_node_score=0.5, verbose=False):
         
         exEdgeScores = [edge_score_accessor(eKG.kg.edges[e]) for e in eKG.kg.edges]
         edgeScoreQuantiles = np.quantile(exEdgeScores, [0.25, 0.75])
@@ -1979,13 +2186,31 @@ class CommunityTool:
             modScores.append( tuple(scores) ) #medians
             modNames.append(mod)
             
-        modDF = pd.DataFrame(np.array(modScores).T)
-        modDF.columns = modNames
-        modDF.index = ["{} ({})".format(x, field) for x in allSubsets] #["{}_mean".format(x) for x in allSubsets]
+            
+        if len(details) > 0:
+            modDF = pd.DataFrame(np.array(modScores).T)
+            modDF.columns = modNames
+            modDF.index = ["{} ({})".format(x, field) for x in allSubsets] #["{}_mean".format(x) for x in allSubsets]
+            
+            #print(modDF)
+            
+            if len(modNames) > 1:
 
-        g = sns.clustermap(modDF, figsize=((2+0.7*len(details)), 4), row_cluster=False, xticklabels=True, yticklabels=True, annot=show_values)    
-        g.ax_heatmap.set_title("{} communities".format(title))
-        g.ax_heatmap.set_ylabel("Community Scores per Network")    
+                g = sns.clustermap(modDF, figsize=((2+0.7*len(details)), 8),
+                                row_cluster=False,
+                                xticklabels=True, yticklabels=True,
+                                annot=show_values)    
+                g.ax_heatmap.set_title("{} communities".format(title))
+                g.ax_heatmap.set_ylabel("Community Scores per Network")
+            else:
+                
+                fig, ax = plt.subplots(figsize=((2+0.7*len(details)), 8))
+                ax = sns.heatmap(modDF, ax=ax,
+                                xticklabels=True, yticklabels=True,
+                                annot=show_values)  
+                  
+                ax.set_title("{} communities".format(title))
+                ax.set_ylabel("Community Scores per Network")
          
     def sort_communities(self, comm_details, details=False):
         
@@ -2308,7 +2533,10 @@ class DifferentialCommunityIdentifier:
         return diffScores
     
     
-    def identify_differential_communities(self, communities, ref_kg, KGs, sort_function=None, score_field="score", use_statistic="cohend", min_nodes=10, min_enriched=0.5, min_effect_size=0.2, all_verbose=False, verbose=False):
+    def identify_differential_communities(self, communities, ref_kg, KGs, sort_function=None,
+                                          score_field="score", use_statistic="cohend",
+                                          min_nodes=10, min_enriched=0.5, min_effect_size=0.2,
+                                          all_verbose=False, verbose=False):
         
         
         if sort_function is None:
@@ -2345,7 +2573,7 @@ class DifferentialCommunityIdentifier:
             numNonRefKGs = len([x for x in diffScores if not x in ref_kg])
             
             accepted=False
-            if (enrichedModule / numNonRefKGs) >= min_enriched:
+            if numNonRefKGs == 0 or (enrichedModule / numNonRefKGs) >= min_enriched:
                 accepted=True                    
                 relcomms.append(cID)
                 reldetails[cID] = diffScores
@@ -2528,7 +2756,7 @@ class DifferentialKG:
         return nodeDiffs
     
     
-    def get_differential_graph(self, kg1:KGraph, kg2: KGraph, field="fc", rescoring=["geneset", "disease"]):
+    def get_differential_graph(self, kg1:KGraph, kg2: KGraph, field="fc", rescoring=["geneset", "disease", "metabolite_targets"]):
         
         ediffs = self._get_edge_fold_changes(kg1, kg2)
         ndiffs = self._get_node_fold_changes(kg1, kg2)
@@ -3400,7 +3628,7 @@ class DefaultDict(dict):
 
 class TwoLevelDifferentialAnalysis:
 
-    def __init__( self, tlDict, sorted_zones, output_folder_formatter, fullKG=None):
+    def __init__( self, tlDict, sorted_zones, output_folder_formatter, fullKG=None, cgcond_sep="_"):
 
         self.tldict = dict(tlDict)
         self.sorted_zones = sorted_zones
@@ -3419,137 +3647,235 @@ class TwoLevelDifferentialAnalysis:
         self.output_folder_formatter = output_folder_formatter
 
         self.recalc_warning=False
+        self.cgcond_sep = cgcond_sep
+        
+        self.logger = logging.getLogger("TwoLevelDiffAnalysis")
+        self.logger.setLevel(logging.INFO)
 
 
-    def calculate_modules(self, relevant_cellgroups=None, cg_zone_formatter="{}_{}", reference_formatter="{}_Ref", diffkg = DifferentialKG(), overwrite=False ):
+    def calculate_modules(self, relevant_cellgroups=None, cg_zone_formatter="{}_{}", reference_formatter="{}_Ref",
+                          diffkg = DifferentialKG(), overwrite=False,
+                          calculate_dkgs=True, calculate_diff_comms=True, calculate_extensions=True, **kwargs):
 
-        if not overwrite and len(self.cellgroupdata) > 0 and self.recalc_warning is False:
-            print("WARNING! This call will overwrite existing results! Call this function again to perform action.")
+        if overwrite and len(self.cellgroupdata) > 0 and self.recalc_warning is False:
+            print("WARNING! This call will clear existing results! Call this function again to perform action.")
             self.recalc_warning=True
             return
 
-        self.recalc_warning=False       
-        self.cellgroupdata.clear()
+        if overwrite:
+            self.recalc_warning=False
+            self.cellgroupdata.clear()
+        
+        #
+        ## Show Params
+        #
+        min_effect_size = kwargs.get("min_effect_size", 1.0)
+        min_enriched = kwargs.get("min_enriched", 0.80)
+        min_nodes = kwargs.get("min_nodes", 10)
+        max_comm_size = kwargs.get("max_comm_size", 100)
+        score_field = kwargs.get("score_field", "fc_score")
+        verbose = kwargs.get("verbose", False)
+        extend_node_types = kwargs.get("extend_node_types", ["gene", "TF", "ncRNA"])
+
+        resolution = kwargs.get("resolution", 4)
+        minEdgeScore = kwargs.get("minEdgeScore", 1.0)
+        min_node_scores = kwargs.get("min_node_scores", {"drug": 1.0, "ncRNA": 0.7})
+        network_extend_spec = kwargs.get("network_extend_spec", {"geneset": {"min_gene_spec": 0.5,
+                                   "min_edge_score": 0.2,
+                                   "max_size_gs": 200,
+                                   "min_fraction_large": 0.7,
+                                   "min_fraction_small": 0.6},
+                       "disease": {"min_gene_spec": 0.5,
+                                   "min_edge_score": 0.2,
+                                   "max_size_gs": 100,
+                                   "min_fraction_large": 0.7,
+                                   "min_fraction_small": 0.6}
+                       })
+        
+        print("min_effect_size", min_effect_size)
+        print("min_enriched", min_enriched)
+        print("min_nodes", min_nodes)
+        print("max_comm_size", max_comm_size)
+        print("score_field", score_field)
+        print("verbose", verbose)
+        print("extend_node_types", extend_node_types)
+        
+        print("resolution", resolution)
+        print("minEdgeScore", minEdgeScore)
+        print("min_node_scores", min_node_scores)
+        print("network_extend_spec", network_extend_spec)
     
+        calculate_extensions_comms = kwargs.get("calculate_extensions_comms", None)
+
+        #
+        ## Detects usable cellgroups
+        #    
+        use_cellgroups = []
         for cellgroup in self.tldict:
 
             if not relevant_cellgroups is None:
                 if not cellgroup in relevant_cellgroups:
                     continue
             print(cellgroup)
+            use_cellgroups.append(cellgroup)
 
-            dkgs = diffkg.calculate_diffkg_list( self.tldict[cellgroup], reference_formatter.format(cellgroup), [x for x in self.tldict[cellgroup]])
-            
-            
-            sorted_dkgs = {}
-            for x in self.sorted_zones:
-                cg_zone_name = cg_zone_formatter.format(cellgroup, x)
-                if cg_zone_name in dkgs:
-                    sorted_dkgs[cg_zone_name] = dkgs[cg_zone_name]
-                    
-            print(sorted_dkgs)
-            
-            cgData = self._get_diff_comms( sorted_dkgs, minEdgeScore=0.5, min_effect_size=0.8, resolution=12 )
+        self.logger.info("Operating on the following cellgroups: {}".format(use_cellgroups))
 
-            self.cellgroupdata[cellgroup]["kg"] = sorted_dkgs
-            for stats in cgData:
-                self.cellgroupdata[cellgroup][stats] = cgData[stats]
-
-
-    def _get_diff_comms(self, tkgs,
-                        min_effect_size=1.0,
-                        resolution=4,
-                        minEdgeScore=1,
-                        min_node_scores={"drug": 1.0, "ncRNA": 0.7},
-                        network_extend_spec = {"geneset": {"min_gene_spec": 0.5,
-                                                           "max_size_gs": 200,
-                                                           "min_fraction_large": 0.6,
-                                                           "min_fraction_small": 0.5},
-                                               "disease": {"min_gene_spec": 0.8,
-                                                           "max_size_gs": 100,
-                                                           "min_fraction_large": 0.7,
-                                                           "min_fraction_small": 0.6}}):
-
-        all_comms = {}
-        all_details = {}
-        all_sigs = {}
-        
         dmi = DifferentialCommunityIdentifier()
         nwe = NetworkExtender()
-        
-        for zone in tkgs:
-            print("Analysing", zone)
-            gene_kg = tkgs[zone].to_gene_kgraph()
+
+        #
+        ## Differential KG pass
+        #
+        if calculate_dkgs:
+            self.logger.info("Calculating DKGs")
             
-            zone_comms = gene_kg.get_communities(minEdgeScore=minEdgeScore, resolution=resolution, prefix=zone, sep=self.name_sep, score_field="fc_score")
-    
-            print("Identified communities")
-            gene_kg.describe_communities(zone_comms)
+            for cellgroup in use_cellgroups:
+                self.logger.info("Calculating DKG for {}".format(cellgroup))
+                dkgs = diffkg.calculate_diffkg_list( self.tldict[cellgroup], reference_formatter.format(cellgroup), [x for x in self.tldict[cellgroup]])          
             
-            sigcomm, sigdetails = dmi.identify_differential_communities(zone_comms, zone, tkgs, all_verbose=False, verbose=False,
-                                                               min_enriched=0.80, min_effect_size=min_effect_size, score_field="fc_score")   
-               
-            print("Significant communities")
-            sig_zone_comms = {x: zone_comms[x] for x in sigcomm}
-            gene_kg.describe_communities(sig_zone_comms)
+                sorted_dkgs = {}
+                for x in self.sorted_zones:
+                    cg_zone_name = cg_zone_formatter.format(cellgroup, x)
+                    if cg_zone_name in dkgs:
+                        sorted_dkgs[cg_zone_name] = dkgs[cg_zone_name]
+                        
+                self.logger.info("Calculated the following DKGs for {}".format(cellgroup))
+                self.logger.info(str(sorted_dkgs))
+                self.cellgroupdata[cellgroup]["kg"] = sorted_dkgs
+            
+            
+        #
+        ## Differential Comms pass
+        #
+        if calculate_diff_comms:
+            self.logger.info("Calculating Differential Communities")
 
-            taken_comms = 0
-        
-            for comm in sigcomm:
-                print(comm, len(zone_comms[comm]))
-        
-                if len(zone_comms[comm]) > 100:
-                    #print("Skipping", comm, "due to size.")
-                    continue
+            for cellgroup in use_cellgroups:
+                cgDKGs = self.cellgroupdata[cellgroup]["kg"]
                 
-                #tkgid = "_".join(comm.split("_", 2)[:2])
-                #tkgid = comm.split(self.name_sep)[0]
-                #print(tkgid, zone==tkgid)
+                all_zone_comms = dict()
+                all_sig_zone_comms = dict()
+                all_comm_details = dict()
                 
-                # adds "geneset", "disease", "ncRNA"
-
-
-
-                eKG = zone_comms[comm]
-                for nodetype in network_extend_spec:
-                    eKG = nwe.extend_network(eKG, tkgs[zone],
-                                             node_types = [nodetype],
-                                             minFraction_large=network_extend_spec[nodetype].get("min_fraction_large", 0.7),
-                                             minFraction_small=network_extend_spec[nodetype].get("min_fraction_small", 0.5), 
-                                             minGeneSpec={nodetype: network_extend_spec[nodetype].get("min_gene_spec", 0.5)},
-                                             min_children_gs=network_extend_spec[nodetype].get("min_children_gs", 3),
-                                             max_size_gs=network_extend_spec[nodetype].get("max_size_gs", 200),
-                                             score_field="fc_score",
-                                             verbose=False)
-
+                for zone in cgDKGs:        
+                    self.logger.info("Analysing {}-{}".format(cellgroup, zone))
+                    gene_kg = cgDKGs[zone].to_gene_kgraph()
+                    
+                    zone_comms = gene_kg.get_communities(minEdgeScore=minEdgeScore, resolution=resolution, prefix=zone,
+                                                        sep=self.name_sep, score_field=score_field)
+            
+                    self.logger.info("All Community Stats")
+                    gene_kg.describe_communities(zone_comms)
+                    
+                    sigcomm, sigdetails = dmi.identify_differential_communities(zone_comms, zone, cgDKGs, all_verbose=verbose, verbose=verbose,
+                                                                    min_enriched=min_enriched, min_effect_size=min_effect_size,
+                                                                    min_nodes=min_nodes, score_field=score_field)   
                     
 
+
+                    self.logger.info("Sig Community Stats")
+                    sig_zone_comms = {x: zone_comms[x] for x in sigcomm if len(zone_comms[x]) <= max_comm_size}
+                    gene_kg.describe_communities(sig_zone_comms)
+
+                    all_zone_comms.update(zone_comms)
+                    all_sig_zone_comms.update(sig_zone_comms)
+                    all_comm_details.update(sigdetails)
+
+                self.cellgroupdata[cellgroup]["raw_comms"] = all_zone_comms
+                self.cellgroupdata[cellgroup]["sig_comms"] = all_sig_zone_comms
+                self.cellgroupdata[cellgroup]["sig_details"] = all_comm_details
                 
-                if len(eKG.kg.nodes) == len(zone_comms[comm]):
-                    #print("Skipping due to no extended nodes.")
-                    continue
-                                    
-                for nodetype in min_node_scores:
-                    # adds nodetype
-                    nwe.extend_nodetypes(eKG, tkgs[zone], nodetype,
-                                             min_node_score=min_node_scores[nodetype],
-                                             node_score_accessor=lambda d: d.get("{}_spec".format(nodetype), 0), # only disease-specific drugs
-                                             edge_score_accessor=lambda d: d.get("fc_score", 0), # no withdrawn drugs,
-                                             verbose=False
-                                             )
+                self.logger.info("For cellgroup {} a total of {} raw communities were reported.".format(cellgroup, len(all_zone_comms)))
+                self.logger.info("For cellgroup {} a total of {} sig communities were reported.".format(cellgroup, len(all_sig_zone_comms)))
+            
+        #
+        ## Differential Comms pass
+        #
+        if calculate_extensions:
+            self.logger.info("Calculating Network Extensions")
+            
+            for cellgroup in use_cellgroups:    
+                
+                # get all data
+                sig_zone_comms = self.cellgroupdata[cellgroup]["sig_comms"]
+                cgDKGs = self.cellgroupdata[cellgroup]["kg"]
+                
+                all_communities = dict()
+                all_communities_enhanced = dict()     
+                                
+                for zone in cgDKGs:   
+                
+                    self.logger.info("Analysing {}".format(zone))
 
-                #print(eKG)
+                    taken_comms = 0           
+                    self.logger.info("Searching for communities with prefix: {}".format(zone))
+                    
+                    gene_kg = cgDKGs[zone].to_gene_kgraph()
+                    
+                    for comm in sig_zone_comms:
+                        
+                        if not comm.startswith(zone):
+                            continue
+                        
+                        if not calculate_extensions_comms is None:
+                            if not comm in calculate_extensions_comms:
+                                continue
+                        
+                        self.logger.info("Input: {} with {} genes.".format(comm, len(sig_zone_comms[comm])))
+                
 
-                taken_comms = taken_comms + 1
+                        eKG = gene_kg.subset_kg(sig_zone_comms[comm])
+                        
+                        for nodetype in network_extend_spec:
+                            eKG = nwe.extend_network(eKG, cgDKGs[zone],
+                                                    node_types = [nodetype],
+                                                    extend_node_types = extend_node_types,
+                                                    minFraction_large=network_extend_spec[nodetype].get("min_fraction_large", 0.7),
+                                                    minFraction_small=network_extend_spec[nodetype].get("min_fraction_small", 0.5), 
+                                                    minGeneSpec={nodetype: network_extend_spec[nodetype].get("min_gene_spec", 0.5)},
+                                                    min_children_gs=network_extend_spec[nodetype].get("min_children_gs", 3),
+                                                    max_size_gs=network_extend_spec[nodetype].get("max_size_gs", 200),
+                                                    
+                                                    min_edge_score=network_extend_spec[nodetype].get("min_edge_score", None),
+                                                    min_edge_quantile=network_extend_spec[nodetype].get("min_edge_quantile", None),
+                                                    max_edge_quantile=network_extend_spec[nodetype].get("max_edge_quantile", None),
+                                                    
+                                                    score_field=score_field,
+                                                    verbose=verbose)
 
-                all_sigs[comm] = eKG
-                all_comms[comm] = zone_comms[comm]
-                all_details[comm] = sigdetails[comm]
+                        if len(eKG.kg.nodes) == len(sig_zone_comms[comm]):
+                            self.logger.info("Skipping due to no extended nodes. In={} Out={}".format(len(sig_zone_comms[comm]), len(eKG.kg.nodes)))
+                            continue
+                                            
+                        for nodetype in min_node_scores:
+                            # adds nodetype
+                            nwe.extend_nodetypes(eKG, cgDKGs[zone], nodetype,
+                                                    min_node_score=min_node_scores[nodetype],
+                                                    node_score_accessor=lambda d: d.get("{}_spec".format(nodetype), 0), # only disease-specific drugs
+                                                    edge_score_accessor=lambda d: d.get(score_field, 0), # no withdrawn drugs,
+                                                    verbose=verbose
+                                                    )
 
-            print("Number of saved communities:", taken_comms)
+                        #print(eKG)
 
+                        self.logger.info("Saving community {} In={} Out={}".format(comm, len(sig_zone_comms[comm]), len(eKG.kg.nodes)))
+                        taken_comms = taken_comms + 1
+                        
+                        eKG.kgraph_name = comm
 
-        return {"communities": all_comms, "communities_details": all_details, "communities_enhanced": all_sigs}
+                        all_communities_enhanced[comm] = eKG
+                        all_communities[comm] = list(eKG.kg.nodes)
+                        
+                
+                self.logger.info("For cellgroup {} a total of {} communities were reported.".format(cellgroup, len(all_communities)))
+                   
+                self.cellgroupdata[cellgroup]["communities"] = all_communities
+                self.cellgroupdata[cellgroup]["communities_enhanced"] = all_communities_enhanced           
+                self.cellgroupdata[cellgroup]["communities_details"] = {x: self.cellgroupdata[cellgroup]["sig_details"][x] for x in all_communities}
+
+                
+            
         
 
     def plot_module_comparisons(self, plot_communities=False, ct = CommunityTool()):
@@ -3569,14 +3895,16 @@ class TwoLevelDifferentialAnalysis:
             
             outname = outdir+"/all_module_heatmap.png"
             
-            cellgroupZones = ["{}_{}".format(cellgroup, x) for x in self.sorted_zones]
+            cellgroupZones = ["{}{}{}".format(cellgroup, self.cgcond_sep, x) for x in self.sorted_zones]
             
-            ct.visualize_communities(cgDetails, "Diff {}".format(cellgroup),
-                                     subsetOrderFunc=cellgroupZones.index,
-                                     field="mean")
-            print(outname)
-            plt.savefig(outname)
-            plt.close()
+            
+            if len(cgDetails) > 0:
+                ct.visualize_communities(cgDetails, "Diff {}".format(cellgroup),
+                                        subsetOrderFunc=cellgroupZones.index,
+                                        field="mean")
+                print(outname)
+                plt.savefig(outname)
+                plt.close()
         
             outname = outdir+"/all_module_compare.png"
             fwidth = 10 + (0.05 * len(cgComms))
@@ -3743,13 +4071,14 @@ class TwoLevelDifferentialAnalysis:
             faxs[i].set_visible(False)      
               
 
-    def _describe_kg(self, kg, name):
+    @deprecated
+    def __describe_kg(self, kg, name, relNodeTypes = ["gene", "geneset", "disease", "drug", "ncRNA", "TF"]):
     
         detailDict = {}
     
         detailDict["name"] = name
     
-        relNodeTypes = ["gene", "geneset", "disease", "drug", "ncRNA", "TF"]
+        
         allNodes = set()
         for relNodeType in relNodeTypes:
             subkg = kg.filter_nodes(lambda x, k: k.node_type_overlap(x, relNodeType))
@@ -3768,8 +4097,8 @@ class TwoLevelDifferentialAnalysis:
     
         return detailDict
 
-    def describe_modules(self, relevant_cellgroups=None, non_verbose=False):
-
+    def describe_modules(self, relevant_cellgroups=None, non_verbose=False, relNodeTypes = ["gene", "geneset", "disease", "drug", "ncRNA", "TF"]):
+        
         if relevant_cellgroups is None:
             relevant_cellgroups = [x for x in self.cellgroupdata]
         
@@ -3777,19 +4106,18 @@ class TwoLevelDifferentialAnalysis:
         for cg in self.cellgroupdata:
 
             cgKGs = self.cellgroupdata[cg]["kg"]
-            #cgComms = self.cellgroupdata[cg]["communities"]
             cgDetails = self.cellgroupdata[cg]["communities_details"]
             cgSigKG = self.cellgroupdata[cg]["communities_enhanced"]
-        
+                    
             for comm in cgSigKG:
         
                 ckg = cgSigKG[comm]
         
-                ddict = self._describe_kg(ckg, comm)
+                ddict = ckg._describe_kg(relNodeTypes = relNodeTypes)
         
                 if not non_verbose:
                     for cname in cgDetails[comm]:
-                        zonename = cname.split("_",1)[1]
+                        zonename = cname.split(self.cgcond_sep,1)[1]
                         ddict["{}_score_median".format(zonename)] = cgDetails[comm][cname]["median"]
                         ddict["{}_score_mean".format(zonename)] = cgDetails[comm][cname]["mean"]
                         ddict["{}_cohend".format(zonename)] = cgDetails[comm][cname]["cohend"]
@@ -3816,7 +4144,7 @@ class TwoLevelDifferentialAnalysis:
             
                
                 refKgName = comm.split( self.name_sep )[0]
-                refZone = refKgName.split("_",1)[1]
+                refZone = refKgName.split(self.cgcond_sep,1)[1]
                 
                 ddict["base_condition"] = refKgName
                 ddict["base_zone"] = refZone
@@ -4132,8 +4460,17 @@ Helpful answer:
                     height=1500, stopwords=STOPWORDS, min_font_size=2,
                     contour_width=3, contour_color='black')
         
+        excludeWords = ["gene", "genes", "important", "major", "function", "cell",
+                        "protein", "role", "involved", "encodes", "plays", "may",
+                        "including", "within", "example", "necessary", "lead",
+                        "result", "crucial", "understanding", "lead", "leading", "play"]
+        
+        text = text.replace("\n", " ")
+        
         atext = re.sub(pattern="[,:;.!]", string=text, repl="").split(" ")
-        atext = [x.lower() for x in atext if not (x.lower() in ["gene", "genes", "important", "major", "function", "cell", "protein", "role", "involved", "encodes", "plays"] or x.lower() in STOPWORDS)]
+        atext = [x.strip().lower() for x in atext if not (x.lower() in
+                     excludeWords or x.lower() in STOPWORDS)
+                 ]
 
         wc_rect.generate_from_frequencies(Counter(atext))
         
@@ -4147,3 +4484,74 @@ Helpful answer:
         text = self.query_genelist(gene_list, context)
         self._plot_wordcloud(text)
         
+        
+        
+class CommunityDescriptor:
+    
+    def __init__(self):
+        pass
+    
+    def describe_modules(self, commKG, comms, comm_details, relNodeTypes = ["gene", "geneset", "disease", "drug", "ncRNA", "TF"]):
+        
+        allModuleDescriptions = []
+        
+        for comm in tqdm(comms):
+            
+            if not comm_details is None:
+                if not comm in comm_details:
+                    continue
+        
+            ckg = commKG.subset_kg(comms[comm])
+            ckg.kgraph_name = comm
+            ddict = ckg._describe_kg(relNodeTypes=relNodeTypes)
+            
+            if not comm_details is None:
+                
+                for cname in comm_details[comm]:               
+                    ddict["{}_score_median".format(cname)] = comm_details[comm][cname]["median"]
+                    ddict["{}_score_mean".format(cname)] = comm_details[comm][cname]["mean"]
+                    ddict["{}_cohend".format(cname)] = comm_details[comm][cname]["cohend"]
+                
+            allModuleDescriptions.append(ddict)
+        
+        descrDF = pd.DataFrame(allModuleDescriptions)
+        return descrDF
+
+    def create_gene_overlap_df(self, commKG, comms, nodetype=None, node_selector=None):
+        
+        if node_selector is None:
+            all_genesets = [x for x in commKG.kg.nodes if commKG.node_type_overlap(x, nodetype)]
+        else:
+            all_genesets = [x for x in commKG.kg.nodes if node_selector(commKG.kg.nodes[x])]
+    
+        genesetDict = {x: set(commKG._get_predecessors(x, ntype="gene", n=1)) for x in all_genesets}
+        genesetDict = {x: genesetDict[x] for x in genesetDict if len(genesetDict[x]) > 0}
+        print(len(genesetDict))
+    
+        allModuleGenesetOverlaps = []
+        for comm in tqdm(comms):
+    
+            ckg = commKG.subset_kg(comms[comm])
+            ckg.kgraph_name = comm
+            
+            ckg_genes = [x for x in ckg.kg.nodes if ckg.node_type_overlap(x, "gene")]
+    
+            for geneset in genesetDict:
+    
+                genesetGenes = genesetDict[geneset]
+                intersect = len(genesetGenes.intersection(ckg_genes))
+                union = len(genesetGenes.union(ckg_genes))
+    
+                overlap = intersect / len(genesetGenes)
+                jaccard = intersect / union
+    
+                if overlap == 0 and jaccard == 0:
+                    continue
+
+                genesetName = commKG.kg.nodes[geneset].get("name", geneset)
+                allModuleGenesetOverlaps.append( (comm, geneset, len(genesetGenes), genesetName, overlap, jaccard) )
+        
+        overlapDF = pd.DataFrame.from_records(allModuleGenesetOverlaps,
+                                              columns=("community", nodetype, "{}_size".format(nodetype), "{}_name".format(nodetype), "overlap", "jaccard"))
+
+        return overlapDF

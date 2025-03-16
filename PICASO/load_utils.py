@@ -15,6 +15,7 @@ from Bio import SeqIO
 import re
 
 import networkx as nx
+import logging
 
 
 def download_and_unzip(download_url_link, dir_path, zipped_filename,destination_dir_name, unzip=True, force_zip=False, force_gz=False):
@@ -63,43 +64,74 @@ def load_go(kg: nx.DiGraph, data_dir, source="GeneOntology", interaction_harmoni
         'is_active_in': "activates",
         'located_in': "relevant_in",
         'part_of': "relevant_in"
-        }):
+        }, organism="human"):
     
-    if not os.path.exists(os.path.join(data_dir, "goa_human.gaf")):
-        download_and_unzip("http://geneontology.org/gene-associations/goa_human.gaf.gz", ".", os.path.join(data_dir, "goa_human.gaf.gz"), data_dir)
-            
-    if not os.path.exists(os.path.join(data_dir, "go-basic.obo")):
-        download_and_unzip("http://geneontology.org/ontology/go-basic.obo", ".", os.path.join(data_dir, "go-basic.obo"), data_dir, unzip=False)
+    go_obo_file = "go-basic.obo"
+    if not os.path.exists(os.path.join(data_dir, go_obo_file)):
+        download_and_unzip("http://geneontology.org/ontology/go-basic.obo", ".", os.path.join(data_dir, go_obo_file), data_dir, unzip=False)
 
-    genenamesURL = 'https://www.genenames.org/cgi-bin/download/custom?col=gd_hgnc_id&col=gd_app_sym&col=gd_app_name&col=gd_status&col=gd_pub_acc_ids&col=gd_pub_refseq_ids&col=md_prot_id&status=Approved&status=Entry%20Withdrawn&hgnc_dbtag=on&order_by=gd_app_sym_sort&format=text&submit=submit'
-    if not os.path.exists(os.path.join(data_dir, "hgnc_annot.tsv")):
-        download_and_unzip(genenamesURL, ".", os.path.join(data_dir, "hgnc_annot.tsv"), data_dir, unzip=False)
+    if "human" in organism:
 
-    ogaf = GafReader(os.path.join(data_dir, "goa_human.gaf"))
-    obodag = GODag(os.path.join(data_dir, "go-basic.obo"))
-            
+        goa_gaf_file = "goa_human.gaf"
+        if not os.path.exists(os.path.join(data_dir, goa_gaf_file)):
+            download_and_unzip("http://geneontology.org/gene-associations/goa_human.gaf.gz", ".", os.path.join(data_dir, goa_gaf_file+".gz"), data_dir)
+                
+
+        genenameFile = "hgnc_annot.tsv"
+        genenamesURL = 'https://www.genenames.org/cgi-bin/download/custom?col=gd_hgnc_id&col=gd_app_sym&col=gd_app_name&col=gd_status&col=gd_pub_acc_ids&col=gd_pub_refseq_ids&col=md_prot_id&status=Approved&status=Entry%20Withdrawn&hgnc_dbtag=on&order_by=gd_app_sym_sort&format=text&submit=submit'
+
+        statusColumn = "Status"
+        statusWithdrawn = ["Symbol Withdrawn", "Entry Withdrawn"]
+        symbolColumn = "Approved symbol"
+        uniprotColumn = "UniProt ID(supplied by UniProt)"
+
+
+        if not os.path.exists(os.path.join(data_dir, genenameFile)):
+            download_and_unzip(genenamesURL, ".", os.path.join(data_dir, genenameFile), data_dir, unzip=False)
+
+    if "mouse" in organism:
+        goa_gaf_file = "goa_mouse.gaf"
+        if not os.path.exists(os.path.join(data_dir, goa_gaf_file)):
+            download_and_unzip("https://current.geneontology.org/annotations/mgi.gaf.gz", ".", os.path.join(data_dir, goa_gaf_file+".gz"), data_dir)
+                
+        genenameFile = "mgi_annot.tsv"
+        genenamesURL = 'https://www.informatics.jax.org/downloads/reports/MRK_Sequence.rpt'
+        
+        statusColumn = "Status"
+        statusWithdrawn = []
+        symbolColumn = "Marker Symbol"
+        uniprotColumn = "UniProt IDs"
+        
+        if not os.path.exists(os.path.join(data_dir, genenameFile)):
+            download_and_unzip(genenamesURL, ".", os.path.join(data_dir, genenameFile), data_dir, unzip=False)
+
+
+
+    ogaf = GafReader(os.path.join(data_dir, goa_gaf_file))
+    obodag = GODag(os.path.join(data_dir, go_obo_file))
 
     # read hgnc <-> uniprot conversion
-    hgncDF = pd.read_csv(os.path.join(data_dir, "hgnc_annot.tsv"), sep="\t")
+    hgncDF = pd.read_csv(os.path.join(data_dir, genenameFile), sep="\t")
     uniprot2hgnc = defaultdict(set)
     all_genes = set()
 
     for ri, row in hgncDF.iterrows():
         
-        status = row["Status"]
+        status = row[statusColumn]
         
-        if status == "Symbol Withdrawn":
+        if status in statusWithdrawn:
             continue
         
-        symbol = row["Approved symbol"]    
-        uniprot= row["UniProt ID(supplied by UniProt)"]
-        
+        symbol  = row[symbolColumn]    
+        uniprots= row[uniprotColumn]
+
         all_genes.add(symbol)
         
-        if pd.isna(uniprot):
+        if pd.isna(uniprots):
             continue
 
-        uniprot2hgnc[uniprot].add(symbol)
+        for uniprot in uniprots.split("|"):
+            uniprot2hgnc[uniprot].add(symbol)
         
         
     #fetch go2gene associations
@@ -184,18 +216,28 @@ def load_go(kg: nx.DiGraph, data_dir, source="GeneOntology", interaction_harmoni
     return kg
 
 
-def load_uniprot_location(kg: nx.DiGraph, data_dir, source="uniprot_celloc"):
+def load_uniprot_location(kg: nx.DiGraph, data_dir, source="uniprot_celloc", organism="human"):
     
     uniprotDB = os.path.join(data_dir, "uniprot_cellular_location.obo")
     if not os.path.exists(uniprotDB):
         uniprotURL = "https://rest.uniprot.org/locations/stream?format=obo&query=%28*%29"
         download_and_unzip(uniprotURL, data_dir, "uniprot_cellular_location.obo", unzip=False)
         
-    uniprotData = os.path.join(data_dir, "uniprot_cellular_location.tsv")
-    if not os.path.exists(uniprotData):
-        uniprotDataURL = "https://rest.uniprot.org/uniprotkb/stream?fields=accession%2Creviewed%2Cid%2Cgene_names%2Corganism_name%2Cgene_primary%2Ccc_subcellular_location&format=tsv&query=%28%28proteome%3AUP000005640%29%29"
-        df = pd.read_csv(uniprotDataURL, sep="\t")
-        df.to_csv(uniprotData, sep="\t", index=False)
+
+    if "human" in organism:
+        uniprotData = os.path.join(data_dir, "uniprot_cellular_location_human.tsv")
+        if not os.path.exists(uniprotData):
+            uniprotDataURL = "https://rest.uniprot.org/uniprotkb/stream?fields=accession%2Creviewed%2Cid%2Cgene_names%2Corganism_name%2Cgene_primary%2Ccc_subcellular_location&format=tsv&query=%28%28proteome%3AUP000005640%29%29"
+            df = pd.read_csv(uniprotDataURL, sep="\t")
+            df.to_csv(uniprotData, sep="\t", index=False)
+
+    if "mouse" in organism:
+        uniprotData = os.path.join(data_dir, "uniprot_cellular_location_mouse.tsv")
+        if not os.path.exists(uniprotData):
+            uniprotDataURL = "https://rest.uniprot.org/uniprotkb/stream?fields=accession%2Creviewed%2Cid%2Cgene_names%2Corganism_name%2Cgene_primary%2Ccc_subcellular_location&format=tsv&query=(taxonomy_id%3A10090)"
+            df = pd.read_csv(uniprotDataURL, sep="\t")
+            df.to_csv(uniprotData, sep="\t", index=False)
+        
         
     
     uniprotdag = GODag(uniprotDB, optional_attrs=['relationship', "xref"])
@@ -298,21 +340,38 @@ def load_uniprot_location(kg: nx.DiGraph, data_dir, source="uniprot_celloc"):
                 
     return kg
         
-        
+
+
             
-def load_omnipath(kg: nx.DiGraph, data_dir, source="omnipath"):
+def load_omnipath(kg: nx.DiGraph, data_dir, source="omnipath", organism="human"):
     
     #
     ## Checking Files
     #
-    omnipathDB = os.path.join(data_dir, "omnipath.tsv")
-    hgncTranslationDB = os.path.join(data_dir, "omnipath_hgnc_uniprot.tsv")
-    
-    if not os.path.exists(hgncTranslationDB):
-        hgncURL = "https://www.genenames.org/cgi-bin/download/custom?col=gd_hgnc_id&col=gd_app_sym&col=gd_app_name&col=md_prot_id&status=Approved&status=Entry%20Withdrawn&hgnc_dbtag=on&order_by=gd_app_sym_sort&format=text&submit=submit"
 
-        hgncTranslation = pd.read_csv(hgncURL, sep="\t")
-        hgncTranslation.to_csv(hgncTranslationDB, sep="\t")
+    if "human" in organism:
+        omnipathDB = os.path.join(data_dir, "omnipath_human.tsv")
+        geneTranslationDB = os.path.join(data_dir, "omnipath_hgnc_uniprot.tsv")
+
+        genenamesURL = "https://www.genenames.org/cgi-bin/download/custom?col=gd_hgnc_id&col=gd_app_sym&col=gd_app_name&col=md_prot_id&status=Approved&status=Entry%20Withdrawn&hgnc_dbtag=on&order_by=gd_app_sym_sort&format=text&submit=submit"
+        
+        geneSymColumn = "Approved symbol"
+        uniprotColumn = "UniProt ID(supplied by UniProt)"
+
+    if "mouse" in organism:
+        omnipathDB = os.path.join(data_dir, "omnipath_mouse.tsv")
+        geneTranslationDB = os.path.join(data_dir, "omnipath_mgi_uniprot.tsv")
+
+        genenamesURL = 'https://www.informatics.jax.org/downloads/reports/MRK_Sequence.rpt'
+
+        geneSymColumn = "Marker Symbol"
+        uniprotColumn = "UniProt IDs"
+
+    
+    if not os.path.exists(geneTranslationDB):
+
+        hgncTranslation = pd.read_csv(genenamesURL, sep="\t")
+        hgncTranslation.to_csv(geneTranslationDB, sep="\t")
 
     if not os.path.exists(os.path.join(data_dir, "miRNA.dat")):
         download_and_unzip("https://mirbase.org/download/miRNA.dat", ".", os.path.join(data_dir, "miRNA.dat"), ".", unzip=False)
@@ -320,7 +379,7 @@ def load_omnipath(kg: nx.DiGraph, data_dir, source="omnipath"):
     if not os.path.exists(omnipathDB):
         
         import omnipath as op
-        opd = op.interactions.AllInteractions().get(organisms="human", genesymbols=True)
+        opd = op.interactions.AllInteractions().get(organisms=organism, genesymbols=True)
         
         opd.to_csv(omnipathDB, sep="\t")
         
@@ -353,20 +412,20 @@ def load_omnipath(kg: nx.DiGraph, data_dir, source="omnipath"):
     #
     ## Adding nodes
     # 
-    hgncTranslation = pd.read_csv(hgncTranslationDB, sep="\t")
+    geneTranslation = pd.read_csv(geneTranslationDB, sep="\t")
     opd  = pd.read_csv(omnipathDB, sep="\t")
         
     uniprot2gene = defaultdict(set)
 
-    for ri, row in hgncTranslation.iterrows():
+    for ri, row in geneTranslation.iterrows():
         
-        hgncGene = row["Approved symbol"]
-        uniprotID = row["UniProt ID(supplied by UniProt)"]
-        
-        if pd.isna(uniprotID):
+        hgncGene = row[geneSymColumn]
+        uniprotIDs = row[uniprotColumn]
+        if pd.isna(uniprotIDs):
             continue
         
-        uniprot2gene[uniprotID].add(hgncGene)
+        for uniprotID in uniprotIDs.split("|"):
+            uniprot2gene[uniprotID].add(hgncGene)
         
     
     interactionTypes = {} # stimulation, inhibition
@@ -478,15 +537,32 @@ def load_omnipath(kg: nx.DiGraph, data_dir, source="omnipath"):
     return kg
         
         
-def load_STRING(kg: nx.DiGraph, data_dir, mart_file="oct2014_mart_export.txt", source="STRING",
-                use_evidences = ['fusion', 'coexpression','experiments','database','textmining']):
+    
+def load_STRING(kg: nx.DiGraph, data_dir, source="STRING",
+                use_evidences = ['fusion', 'coexpression','experiments','database','textmining'], organism="human"):
+
+    if "human" in organism:
+        taxid = "9606"
+        ensProtIdCol = "Ensembl Protein ID"
+        geneSymbolCol = "HGNC symbol"
+    if "mouse" in organism:
+        taxid = "10090"
+        ensProtIdCol = "Ensembl Protein ID"
+        geneSymbolCol = "MGI symbol"
+
+    logger = logging.getLogger("load_STRING")       
+    stringFile = "{}.protein.links.full.v11.5.txt".format(taxid)
+
+    logger.info("Loading file " + stringFile)
+
+    if not os.path.exists(os.path.join(data_dir, stringFile)):
+        #https://stringdb-downloads.org/download/protein.links.full.v11.5/10090.protein.links.full.v11.5.txt.gz
+        stringFileURL = "https://stringdb-downloads.org/download/protein.links.full.v11.5/"+stringFile + ".gz"
+        logger.info("Downloading file " + stringFileURL)
+        download_and_unzip(stringFileURL, ".", os.path.join(data_dir, stringFile+".gz"), data_dir)
 
 
-    if not os.path.exists(os.path.join(data_dir, "9606.protein.links.full.txt.gz")):
-        download_and_unzip("https://stringdb-static.org/download/protein.links.full.v11.5/9606.protein.links.full.v11.5.txt.gz", ".", os.path.join(data_dir, "9606.protein.links.full.txt.gz"), data_dir)
-
-
-    df = pd.read_csv(os.path.join(data_dir, "9606.protein.links.full.txt"), sep=" ")
+    df = pd.read_csv(os.path.join(data_dir, stringFile), sep=" ")
     
     subdf = df[["protein1", "protein2"]+use_evidences]
     subdf["score"] = subdf[use_evidences].max(axis=1)/1000
@@ -506,21 +582,22 @@ def load_STRING(kg: nx.DiGraph, data_dir, mart_file="oct2014_mart_export.txt", s
 
     for x in allStringProts:
         all_ensp_proteins.add(x.split(".")[1])
-        
-        
+    
+    mart_file=taxid + ".mart_export_oct2014.txt"
+    logger.info("Loading biomart file " + mart_file)
     martDF = pd.read_csv(os.path.join(data_dir, mart_file), sep="\t")
 
     ensemblProt2Gene = defaultdict(set)
     
-    martEmptyProt = ~pd.isna(martDF["Ensembl Protein ID"])
-    martEmptyHgnc = ~pd.isna(martDF["HGNC symbol"])
+    martEmptyProt = ~pd.isna(martDF[ensProtIdCol])
+    martEmptyHgnc = ~pd.isna(martDF[geneSymbolCol])
     
     martFilter = np.where(martEmptyProt & martEmptyHgnc)
     
     for ri, row in martDF.loc[martFilter].iterrows():
         
-        protid = "9606.{}".format(row["Ensembl Protein ID"])
-        geneid = row["HGNC symbol"]
+        protid = "{}.{}".format(taxid, row[ensProtIdCol])
+        geneid = row[geneSymbolCol]
 
         ensemblProt2Gene[protid].add(geneid)
         
@@ -564,16 +641,73 @@ def load_STRING(kg: nx.DiGraph, data_dir, mart_file="oct2014_mart_export.txt", s
                 
     return kg
 
+def load_mgi_disease_ontology(kg: nx.DiGraph, data_dir, source="MGI_DO", organism="human"):
 
-def load_opentargets(kg: nx.DiGraph, data_dir, source="opentargets", min_disease_association_score=0.8):
+    logger = logging.getLogger("load_mgi_disease_ontology")
+    logger.info("Adding MGI Disease Ontology")
+
+    mgiDO = pd.read_csv("https://www.informatics.jax.org/downloads/reports/MGI_DO.rpt",sep="\t")
+
+    if organism == "human":
+        taxID = 9606
+
+    if organism == "mouse":
+        taxID = 10090
+
+    useDO = mouseDO = mgiDO[mgiDO["NCBI Taxon ID"] == taxID]
+
+    for ri, row in useDO.iterrows():
+
+        gene = row["Symbol"]
+        disease_id = row["DO Disease ID"]
+        disease_label = row["DO Disease Name"]
+
+        if not gene in kg.nodes:
+            kg.add_node(gene, type=set(["gene"]), source=source, name=gene, score=0)
+        else:
+            kg.nodes[gene]["type"].add("gene")
+
+        if not disease_id in kg.nodes:
+            kg.add_node(disease_id, type=set(["disease"]), name=disease_label, source=source)
+        else:
+            kg.nodes[disease_id]["type"].add("disease")
+
+        disease_data = {
+            "type": "interacts",
+            "source": source
+        }
+        
+        kg.add_edge( gene, disease_id, **disease_data )
+
+
+def load_opentargets(kg: nx.DiGraph, data_dir, source="opentargets", min_disease_association_score=0.8, organism="human"):
     
+    logger = logging.getLogger("load_opentargets")
+
     if not os.path.exists(os.path.join(data_dir, "opentargets_knowndrugs.tsv")):
-        print("Missing OpenTargets data frame knowndrugs. Prepare data according to Jupyter Notebook:", "opentargets_knowndrugs")
+        logger.error("Missing OpenTargets data frame knowndrugs. Prepare data according to Jupyter Notebook: opentargets_knowndrugs")
         exit(-1)
 
     if not os.path.exists(os.path.join(data_dir, "opentargets_disease_associations.tsv")):
-        print("Missing OpenTargets data frame knowndrugs. Prepare data according to Jupyter Notebook:", "opentargets_disease_associations")
+        logger.error("Missing OpenTargets data frame knowndrugs. Prepare data according to Jupyter Notebook: opentargets_disease_associations")
         exit(-1)
+
+    human2mouse = defaultdict(set)
+
+    if organism == "mouse":
+        # got this idea from: https://www.biostars.org/p/9567892/
+        mouse_human_genes = pd.read_csv("http://www.informatics.jax.org/downloads/reports/HOM_MouseHumanSequence.rpt",sep="\t")
+
+        mouse = mouse_human_genes[mouse_human_genes["NCBI Taxon ID"] == 10090]
+        human = mouse_human_genes[mouse_human_genes["NCBI Taxon ID"] == 9606]
+
+        mouseDF = mouse.iloc[:, [0, 3]]
+        humanDF = human.iloc[:, [0, 3]]
+        conversion_df = pd.merge(humanDF, mouseDF, on="DB Class Key", suffixes=["_human", "_mouse"])
+
+        for ri, row in conversion_df.iterrows():
+            human2mouse[ row["Symbol_human"] ].add(row["Symbol_mouse"])
+
 
     ot_drugs = pd.read_csv("../data/opentargets_knowndrugs.tsv", sep="\t")
     ot_disease = pd.read_csv("../data/opentargets_disease_associations.tsv", sep="\t")
@@ -582,27 +716,31 @@ def load_opentargets(kg: nx.DiGraph, data_dir, source="opentargets", min_disease
     #
     ## Adding Disease Nodes
     #
-    
-    for ri, row in ot_disease.iterrows():
-        gene = row["targetSymbol"]
-        disease_id = row["diseaseId"].replace("_", ":")
-        disease_label = row["diseaseLabel"]
-        
-        if not gene in kg.nodes:
-            kg.add_node(gene, type=set(["gene"]), source=source, name=gene, score=0)
-        else:
-            kg.nodes[gene]["type"].add("gene")
-            
-        if not disease_id in kg.nodes:
-            kg.add_node(disease_id, type=set(["disease"]), name=disease_label, source=source)
-        else:
-            kg.nodes[disease_id]["type"].add("disease")
+    logger.info("Adding disease nodes")
+    if organism == "human":
+        for ri, row in ot_disease.iterrows():
+            gene = row["targetSymbol"]
+            disease_id = row["diseaseId"].replace("_", ":")
+            disease_label = row["diseaseLabel"]
+
+            for gene in human2mouse.get(gene, [gene]):
+                if not gene in kg.nodes:
+                    kg.add_node(gene, type=set(["gene"]), source=source, name=gene, score=0)
+                else:
+                    kg.nodes[gene]["type"].add("gene")
+                
+            if not disease_id in kg.nodes:
+                kg.add_node(disease_id, type=set(["disease"]), name=disease_label, source=source)
+            else:
+                kg.nodes[disease_id]["type"].add("disease")
+    else:
+        logger.info("Skipping adding disease nodes")
             
             
     #
     ## Adding Drug Nodes
     #
-    
+    logger.info("Adding Drug Nodes")
     for ri, row in ot_drugs.iterrows():
         drug = row["drugId"]
         disease_id = row["diseaseId"].replace("_", ":")
@@ -613,10 +751,11 @@ def load_opentargets(kg: nx.DiGraph, data_dir, source="opentargets", min_disease
         drugName = row["prefName"]
         drugType = row["drugType"]
         
-        if not gene in kg.nodes:
-            kg.add_node(gene, type=set(["gene"]), name=geneName, source=source, score=0)
-        else:
-            kg.nodes[gene]["type"].add("gene")
+        for gene in human2mouse.get(gene, [gene]):
+            if not gene in kg.nodes:
+                kg.add_node(gene, type=set(["gene"]), name=geneName, source=source, score=0)
+            else:
+                kg.nodes[gene]["type"].add("gene")
             
         if not drug in kg.nodes:
             kg.add_node(drug, type=set(["drug"]), source=source, name=drugName, drug_type=drugType)
@@ -630,32 +769,37 @@ def load_opentargets(kg: nx.DiGraph, data_dir, source="opentargets", min_disease
     #
     ## Adding Disease Edges
     #
-    for ri, row in ot_disease.iterrows():
+    logger.info("Adding disease edges")
+    if organism == "human":
+        for ri, row in ot_disease.iterrows():
+                
+            gene = row["targetSymbol"]
+            disease_id = row["diseaseId"].replace("_", ":")
             
-        gene = row["targetSymbol"]
-        disease_id = row["diseaseId"].replace("_", ":")
-        
-        disease_score = float(row["datatypeHarmonicScore"])
-        disease_evidences = row["datatypeEvidenceCount"]
-        disease_evidence_source = row["datatypeId"]
-        
-        if disease_score < min_disease_association_score:
-            continue
-        
-        disease_data = {
-            "disease_score": disease_score,
-            "disease_evidences": disease_evidences,
-            "disease_evidence_source": disease_evidence_source,
-            "type": "interacts",
-            "source": source
-        }
-        
-        kg.add_edge( gene, disease_id, **disease_data )
-        
+            disease_score = float(row["datatypeHarmonicScore"])
+            disease_evidences = row["datatypeEvidenceCount"]
+            disease_evidence_source = row["datatypeId"]
+            
+            if disease_score < min_disease_association_score:
+                continue
+            
+            disease_data = {
+                "disease_score": disease_score,
+                "disease_evidences": disease_evidences,
+                "disease_evidence_source": disease_evidence_source,
+                "type": "interacts",
+                "source": source
+            }
+            
+            for gene in human2mouse.get(gene, [gene]):
+                kg.add_edge( gene, disease_id, **disease_data )
+    else:
+        logger.info("Skipping adding disease edges")
         
     #
     ## Adding Drug Edges
     #
+    logger.info("Adding drug edges")
     for ri, row in ot_drugs.iterrows():
         #drugId	targetId	diseaseId	status	diseaseName	targetGeneSymbol	targetGeneName
 
@@ -683,18 +827,31 @@ def load_opentargets(kg: nx.DiGraph, data_dir, source="opentargets", min_disease
         }
         
         kg.add_edge( disease_id, drug, **drug_disease_data )
-        kg.add_edge( drug_target, drug, type="target_of", source=source )
+
+        for dtarget in human2mouse.get(drug_target, [drug_target]):
+            kg.add_edge( dtarget, drug, type="target_of", source=source )
         
     return kg
         
         
-def load_reactome(kg: nx.DiGraph, data_dir, source="reactome"):
+def load_reactome(kg: nx.DiGraph, data_dir, source="reactome", organism="human"):
 
-    reactomeFile = os.path.join(data_dir,"ReactomePathways.gmt")
-    
-    if not os.path.exists(reactomeFile):
-        download_and_unzip("https://reactome.org/download/current/ReactomePathways.gmt.zip", ".", os.path.join(data_dir,"ReactomePathways.gmt.zip"), data_dir)
+    logger = logging.getLogger("load_reactome")
+
+    if organism == "human":
+        logger.info("Loading REACTOME human")
+        reactomeFile = os.path.join(data_dir,"ReactomePathways.gmt")
         
+        if not os.path.exists(reactomeFile):
+            logger.info("Downloading REACTOME human")
+            download_and_unzip("https://reactome.org/download/current/ReactomePathways.gmt.zip", ".", os.path.join(data_dir,"ReactomePathways.gmt.zip"), data_dir)
+
+        logger.info("Loading REACTOME human from " + reactomeFile)
+
+    if organism == "mouse":
+        logger.info("Loading REACTOME mouse")
+        reactomeFile = os.path.join(data_dir, "kegg_gmts/mouse/m2.cp.reactome.v2023.2.Mm.symbols.gmt") 
+        logger.info("Loading REACTOME mouse from " + reactomeFile)
     
     with open(reactomeFile) as fin:
     
@@ -722,7 +879,52 @@ def load_reactome(kg: nx.DiGraph, data_dir, source="reactome"):
     return kg
 
 
-def load_npinter(kg: nx.DiGraph, data_dir, source="npinter5"):
+def load_mirtarbase(kg: nx.DiGraph, data_dir, source="mirtarbase", organism="human"):
+
+    logger = logging.getLogger("load mirtarbase")
+    logger.info("Adding mirtarbase")
+
+    if organism == "human":
+        mirtarbaseFile = "{}/hsa_MTI.xls".format(data_dir)
+    if organism == "mouse":
+        mirtarbaseFile = "{}/mmu_MTI.xls".format(data_dir)
+
+
+    mirDF = pd.read_excel(mirtarbaseFile)
+
+    for ri, row in mirDF.iterrows():
+        mirnaID = row["miRNA"].replace("mmu-", "")
+        gene = row["Target Gene"].capitalize()
+
+        if not gene in kg.nodes:
+            kg.add_node(gene, type=set(["gene"]), source=source, name=gene, score=0)
+        else:
+            kg.nodes[gene]["type"].add("gene")
+
+        if not mirnaID in kg.nodes:
+            kg.add_node(mirnaID, type=set(["ncRNA", "miRNA"]), source=source, name=mirnaID, score=0)
+        else:
+            kg.nodes[mirnaID]["type"].add("ncRNA")
+            kg.nodes[mirnaID]["type"].add("miRNA")
+
+
+        mirna_data = {
+            "type": "represses",
+            "source": source
+        }
+        
+        kg.add_edge( mirnaID, gene, **mirna_data )
+
+    return kg
+
+
+
+
+def load_npinter(kg: nx.DiGraph, data_dir, source="npinter5", organism="human"):
+
+    logger = logging.getLogger("load NPInter")
+    logger.info("Adding NPInter")
+    logger.warn("NPInter may not be accurate in terms of reported interaction directions.")
 
     npinterFile = os.path.join(data_dir,"interaction_NPInterv5.txt")
     
@@ -730,8 +932,13 @@ def load_npinter(kg: nx.DiGraph, data_dir, source="npinter5"):
         download_and_unzip("http://bigdata.ibp.ac.cn/npinter5/download/file/interaction_NPInterv5.txt.gz", ".", os.path.join(data_dir,"interaction_NPInterv5.txt.gz"), data_dir, force_zip=True)
 
 
+    if organism == "human":
+        orgname = "Homo sapiens"
+    if organism == "mouse":
+        orgname = "Mus musculus"
+
     df = pd.read_csv(npinterFile, sep="\t")
-    df = df[df.organism == "Homo sapiens"].copy()
+    df = df[df.organism == orgname].copy()
 
     colMap = {
     'binding; regulatory': 'binding;regulatory',
@@ -787,9 +994,10 @@ def load_npinter(kg: nx.DiGraph, data_dir, source="npinter5"):
                 tarID = tarName
     
     
-        if ncName.startswith("hsa-"):
+        if ncName.startswith(("hsa-", "mmu-")):
             ncName = ncName[4:]
-            
+
+
         if ncID.startswith("NON"):
             # NONHSAG....
             ncName = ncID
@@ -906,13 +1114,263 @@ def load_human_transcription_factors(kg: nx.DiGraph, data_dir, source="human_tra
             kg.nodes[gene]["type"].update(tfgene)
     
 
+def load_TFlink(kg: nx.DiGraph, data_dir, source="TFlink", organism="human"):
+
+    logger = logging.getLogger("load_reactome")
+
+    if organism == "human":
+        logger.info("Loading TFLINK "+organism)
+        tflinkFile = os.path.join(data_dir,"TFLink_human.gmt")
+        
+        if not os.path.exists(tflinkFile):
+            logger.info("Downloading TFLINK "+organism)
+            download_and_unzip("https://cdn.netbiol.org/tflink/download_files/TFLink_Homo_sapiens_interactions_LS_GMT_proteinName_v1.0.gmt", ".",
+            os.path.join(data_dir,"TFLink_{}.gmt".format(organism)), data_dir, unzip=False)
+
+        logger.info("Loading TFLINK "+organism+" from " + tflinkFile)
+        
+
+    if organism == "mouse":
+        logger.info("Loading TFLINK "+organism)
+        tflinkFile = os.path.join(data_dir,"TFLink_mouse.gmt")
+        
+        if not os.path.exists(tflinkFile):
+            logger.info("Downloading TFLINK "+organism)
+            download_and_unzip("https://cdn.netbiol.org/tflink/download_files/TFLink_Mus_musculus_interactions_LS_GMT_proteinName_v1.0.gmt", ".",
+            os.path.join(data_dir,"TFLink_{}.gmt".format(organism)), data_dir, unzip=False)
+
+        logger.info("Loading TFLINK "+organism+" from " + tflinkFile)
+        
+
+    with open(tflinkFile) as fin:
+    
+        for line in fin:
+            line = line.strip().split("\t")
+            
+            tfSymbol = line[0]
+            tfUniprot = line[1]
+            
+            targetGenes = [x for x in line[2:] if x[0].isupper()]
+                
+            if not tfSymbol in kg.nodes:
+                kg.add_node(tfSymbol, id=tfSymbol, type=set(["TF", "gene"]), name=tfSymbol, score=0, source=source)
+            else:
+                kg.nodes[tfSymbol]["type"].add("TF")
+                kg.nodes[tfSymbol]["type"].add("gene")
+            
+            for gene in targetGenes:
+                if not gene in kg.nodes:
+                    kg.add_node(gene, type=set(["gene"]), name=gene, source=source, score=0)
+                else:
+                    kg.nodes[gene]["type"].add("gene")
+                    
+                kg.add_edge(tfSymbol, gene, type="activates", score=0, source=source)
+    
+    return kg
 
 
 
 
 
+def load_xdeathdb(kg: nx.DiGraph, data_dir, source="xdeathdb", organism="human"):
+
+    inputFile = os.path.join(data_dir, "xdeathdb.csv")        
+    df = pd.read_csv(inputFile, header=0, encoding="latin-1")
+    df = df[~pd.isna(df.cell_death)]
+    
+    human2mouse = defaultdict(set)
+
+    if organism == "mouse":
+        # got this idea from: https://www.biostars.org/p/9567892/
+        mouse_human_genes = pd.read_csv("http://www.informatics.jax.org/downloads/reports/HOM_MouseHumanSequence.rpt",sep="\t")
+
+        mouse = mouse_human_genes[mouse_human_genes["NCBI Taxon ID"] == 10090]
+        human = mouse_human_genes[mouse_human_genes["NCBI Taxon ID"] == 9606]
+
+        mouseDF = mouse.iloc[:, [0, 3]]
+        humanDF = human.iloc[:, [0, 3]]
+        conversion_df = pd.merge(humanDF, mouseDF, on="DB Class Key", suffixes=["_human", "_mouse"])
+
+        for ri, row in conversion_df.iterrows():
+            human2mouse[ row["Symbol_human"] ].add(row["Symbol_mouse"])
+
+    uniprot_node_names = {}
+    for node in kg.nodes:
+        if "subcellular_location" in kg.nodes[node].get("type", []):
+            uniprot_node_names[ kg.nodes[node].get("name", "") ] = node
+
+    for ri, row in df.iterrows():
+        
+        cellDeathName = row["cell_death"]
+        geneSymbol = row["symbol"]
+        location = row["location"]
+        disease = row["disease_name"]
+                
+        if geneSymbol is None:
+            continue
+        
+        if pd.isna(geneSymbol) or pd.isna(location):
+            continue
+        
+        if not pd.isna(disease):
+            cellDeathName = "{} ({})".format(cellDeathName, disease)
+        
+        if not cellDeathName in kg.nodes:
+            kg.add_node(cellDeathName, type=set(["geneset", "cell_death_pw"]), score=0, name=cellDeathName, source=source)
+        else:
+            kg.nodes[cellDeathName]["type"].update(["geneset", "cell_death_pw"])
+        
+        
+        for gene in human2mouse.get(geneSymbol, [geneSymbol]):
+            if not gene in kg.nodes:
+                kg.add_node(gene, type=set(["gene"]), score=0, name=gene, source=source)
+            else:
+                kg.nodes[gene]["type"].update(["gene"])
+                
+            kg.add_edge(gene, cellDeathName, type="relevant_in", score=0, source=source)
+            
+            if location in uniprot_node_names:
+                kg.add_edge(gene, uniprot_node_names[location], type="relevant_in", score=0, source=source)
+
+    return kg
+
+def load_smpdb(kg: nx.DiGraph, data_dir, source="smpdb", organism="human"):
+
+    inputFile = os.path.join(data_dir, "all_smpdb.csv")        
+    df = pd.read_csv(inputFile, header=0)
+    
+    geneTranslationDB = os.path.join(data_dir, "omnipath_hgnc_uniprot.tsv")
+    genenamesURL = "https://www.genenames.org/cgi-bin/download/custom?col=gd_hgnc_id&col=gd_app_sym&col=gd_app_name&col=md_prot_id&status=Approved&status=Entry%20Withdrawn&hgnc_dbtag=on&order_by=gd_app_sym_sort&format=text&submit=submit"
+    
+    geneSymColumn = "Approved symbol"
+    uniprotColumn = "UniProt ID(supplied by UniProt)"
+
+    if not os.path.exists(geneTranslationDB):
+        hgncTranslation = pd.read_csv(genenamesURL, sep="\t")
+        hgncTranslation.to_csv(geneTranslationDB, sep="\t")
+
+    uniprot2gene = defaultdict(set)
+    geneTranslation = pd.read_csv(geneTranslationDB, sep="\t")
+    for ri, row in geneTranslation.iterrows():
+        
+        hgncGene = row[geneSymColumn]
+        uniprotIDs = row[uniprotColumn]
+        if pd.isna(uniprotIDs):
+            continue
+        
+        for uniprotID in uniprotIDs.split("|"):
+            uniprot2gene[uniprotID].add(hgncGene)
+
+    human2mouse = defaultdict(set)
+
+    if organism == "mouse":
+        # got this idea from: https://www.biostars.org/p/9567892/
+        mouse_human_genes = pd.read_csv("http://www.informatics.jax.org/downloads/reports/HOM_MouseHumanSequence.rpt",sep="\t")
+
+        mouse = mouse_human_genes[mouse_human_genes["NCBI Taxon ID"] == 10090]
+        human = mouse_human_genes[mouse_human_genes["NCBI Taxon ID"] == 9606]
+
+        mouseDF = mouse.iloc[:, [0, 3]]
+        humanDF = human.iloc[:, [0, 3]]
+        conversion_df = pd.merge(humanDF, mouseDF, on="DB Class Key", suffixes=["_human", "_mouse"])
+
+        for ri, row in conversion_df.iterrows():
+            human2mouse[ row["Symbol_human"] ].add(row["Symbol_mouse"])
 
 
+    for ri, row in df.iterrows():
+        
+        smpdbid = row["SMPDB ID"]
+        genes = uniprot2gene.get(row["Uniprot ID"], None)
+        pathway = row["Pathway Name"]
+        
+        if "SMPDB" in smpdbid:
+            continue
+        if genes is None:
+            continue
+        
+        if not smpdbid in kg.nodes:
+            kg.add_node(smpdbid, type=set(["geneset", "metabolic_pathway"]), score=0, name=pathway, source=source)
+        else:
+            kg.nodes[smpdbid]["type"].update(["geneset", "metabolic_pathway"])
+        
+        for hgene in genes:    
+            for gene in human2mouse.get(hgene, [hgene]):
+                if not gene in kg.nodes:
+                    kg.add_node(gene, type=set(["gene"]), score=0, name=gene, source=source)
+                else:
+                    kg.nodes[gene]["type"].update(["gene"])
+                    
+                kg.add_edge(gene, smpdbid, type="relevant_in", score=0, source=source)
+    
+    return kg
+
+missingUniprotIDs = set()
+
+def load_metalinks(kg: nx.DiGraph, data_dir, source="metalinks", organism="human"):
+
+    df = pd.read_csv(os.path.join(data_dir, "metalinks_200db_300exp_700pred_900comb.csv"), header=0)
+    
+    human2mouse = defaultdict(set)
+
+    if organism == "mouse":
+        # got this idea from: https://www.biostars.org/p/9567892/
+        mouse_human_genes = pd.read_csv("http://www.informatics.jax.org/downloads/reports/HOM_MouseHumanSequence.rpt",sep="\t")
+
+        mouse = mouse_human_genes[mouse_human_genes["NCBI Taxon ID"] == 10090]
+        human = mouse_human_genes[mouse_human_genes["NCBI Taxon ID"] == 9606]
+
+        mouseDF = mouse.iloc[:, [0, 3]]
+        humanDF = human.iloc[:, [0, 3]]
+        conversion_df = pd.merge(humanDF, mouseDF, on="DB Class Key", suffixes=["_human", "_mouse"])
+
+        for ri, row in conversion_df.iterrows():
+            human2mouse[ row["Symbol_human"] ].add(row["Symbol_mouse"])
 
 
-
+    for ri, row in df.iterrows():
+        
+        metName = row["MetName"]
+        protName = row["Protein"]
+        
+        
+        if metName is None or pd.isna(metName):
+            continue
+        if protName is None or pd.isna(protName):
+            continue
+        
+       
+        combinedScore = row['Combined']
+        cellLoc = row["Cellular Location"]
+        tissLoc = row["Tissue Location"]
+        biospecLoc = row["Biospecimen Location"]
+        diseases = row["Diseases"]
+        pathways = row["Pathways"]
+        
+        add_data = {
+            "interaction_score": combinedScore,
+            "cell_location": cellLoc,
+            "tissue_location": tissLoc,
+            "biospecimen_location": biospecLoc,
+            "diseases": diseases,
+            "pathways": pathways,
+        }
+        
+        
+        if not metName in kg.nodes:
+            kg.add_node(metName, type=set(["metabolite_targets"]), score=0, name=metName, source=source)
+        else:
+            if kg.nodes[metName].get("source", "") != source:
+                metName = metName + "(met)"
+                kg.add_node(metName, type=set(["metabolite_targets"]), score=0, name=metName, source=source)
+        
+        for gene in human2mouse.get(protName, [protName]):
+            if not gene in kg.nodes:
+                kg.add_node(gene, type=set(["gene"]), score=0, name=gene, source=source)
+            else:
+                kg.nodes[gene]["type"].update(["gene"])
+                
+            kg.add_edge(gene, metName, type="target_of", score=0, source=source, **add_data)
+    
+    return kg
+            
